@@ -7,7 +7,7 @@ const RESEND_INTERVAL = Number(process.env.OTP_RESEND_INTERVAL_SECONDS || 45);
 
 const hashOtp = (otp, reference) => crypto.createHash('sha256').update(`${otp}:${reference}`).digest('hex');
 
-const generateOtp = () => crypto.randomInt(100000, 999999).toString();
+const generateOtp = () => crypto.randomInt(1000, 10000).toString();
 
 async function canSend(phone) {
   const last = await Otp.findOne({ phone }).sort({ createdAt: -1 });
@@ -34,6 +34,7 @@ async function issueOtp(phone) {
   });
 
   // For now return OTP in payload (since we cannot send SMS inside repo)
+  console.log(`[OTP SERVICE FIXED] Generated 4-DIGIT OTP for ${phone}: ${otp}`);
   return { reference, expiresAt, otp };
 }
 
@@ -46,6 +47,10 @@ async function verifyOtp(reference, otp) {
   record.attempts += 1;
 
   if (record.otp_hash !== hashOtp(otp, reference)) {
+    console.error(`[OTP DEBUG] Verification Failed! Phone: ${record.phone}`);
+    console.error(`[OTP DEBUG] Received OTP: ${otp}`);
+    console.error(`[OTP DEBUG] Stored Hash: ${record.otp_hash}`);
+    console.error(`[OTP DEBUG] Computed Hash: ${hashOtp(otp, reference)}`);
     await record.save();
     throw new Error('Invalid OTP');
   }

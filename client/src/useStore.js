@@ -23,6 +23,7 @@ const defaultProfileForm = {
 };
 
 export const useStore = create((set) => ({
+  // User Location
   userLocation: null,
   setUserLocation: (loc) => set({ userLocation: loc }),
 

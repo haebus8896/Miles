@@ -17,6 +17,7 @@ const createAddressSchema = z.object({
   tags: z.array(z.string()).optional().default([]),
   door_photo: z.string().optional().default(''),
   polyline: z.array(latLngSchema).optional().default([]),
+  source: latLngSchema.optional(),
   road_point: latLngSchema.optional(),
   destination_point: latLngSchema.optional(),
   owner_full_name: z.string().optional().default(''),

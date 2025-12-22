@@ -1,0 +1,17 @@
+{
+  "name": "miles-saas-root",
+  "private": true,
+  "workspaces": [
+    "slmd/core",
+    "slmd/plugins/*",
+    "slmd/admin-ui"
+  ],
+  "scripts": {
+    "dev:core": "npm run dev --workspace=slmd/core",
+    "start:core": "npm run start --workspace=slmd/core",
+    "test": "npm run test --workspaces"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}

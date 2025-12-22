@@ -27,6 +27,10 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(compression());
 app.use(morgan('dev'));
+app.use((req, res, next) => {
+  console.log(`[Request] ${req.method} ${req.url} | Origin: ${req.headers.origin}`);
+  next();
+});
 app.use(
   rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -42,6 +46,8 @@ app.use('/api/addresses', require('./routes/addressRoutes'));
 app.use('/api/roads', require('./routes/roadRoutes'));
 app.use('/api/profiles', require('./routes/profileRoutes'));
 app.use('/api/otp', require('./routes/otpRoutes'));
+app.use('/api/residence', require('./routes/residenceRoutes'));
+app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/delivery', require('./routes/deliveryRoutes'));
 
 // health
@@ -52,4 +58,4 @@ app.use((req, res, next) => {
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5001;
-app.listen(PORT, () => console.log('Server running on port', PORT));
+app.listen(PORT, '0.0.0.0', () => console.log('Server running on port', PORT));

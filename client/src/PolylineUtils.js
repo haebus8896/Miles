@@ -49,6 +49,7 @@ export function pathDistanceMeters(points = []) {
   return total;
 }
 
+
 export function formatDistance(meters = 0) {
   if (!meters) return '0 m';
   if (meters >= 1000) {
@@ -58,4 +59,66 @@ export function formatDistance(meters = 0) {
     return `${Math.round(meters)} m`;
   }
   return `${meters.toFixed(1)} m`;
+}
+
+// --- Precise Snapping Utils ---
+
+function latLngToMeters(lat, lng, refLat) {
+  const R = 6378137; // Earth radius in meters
+  const x = (lng * Math.PI / 180) * R * Math.cos(refLat * Math.PI / 180);
+  const y = (lat * Math.PI / 180) * R;
+  return { x, y };
+}
+
+function metersToLatLng(x, y, refLat) {
+  const R = 6378137;
+  const lat = (y / R) * (180 / Math.PI);
+  const lng = (x / (R * Math.cos(refLat * Math.PI / 180))) * (180 / Math.PI);
+  return { lat, lng };
+}
+
+export function snapPointToPolyline(clickLatLng, polyline) {
+  const clickLat = typeof clickLatLng.lat === 'function' ? clickLatLng.lat() : clickLatLng.lat;
+  const clickLng = typeof clickLatLng.lng === 'function' ? clickLatLng.lng() : clickLatLng.lng;
+
+  const refLat = clickLat;
+  const P = latLngToMeters(clickLat, clickLng, refLat);
+
+  let closestPoint = null;
+  let minDistSq = Infinity;
+
+  // Polyline is array of {lat, lng} objects
+  for (let i = 0; i < polyline.length - 1; i++) {
+    const A_ll = polyline[i];
+    const B_ll = polyline[i + 1];
+
+    const A = latLngToMeters(A_ll.lat, A_ll.lng, refLat);
+    const B = latLngToMeters(B_ll.lat, B_ll.lng, refLat);
+
+    const ABx = B.x - A.x;
+    const ABy = B.y - A.y;
+
+    const APx = P.x - A.x;
+    const APy = P.y - A.y;
+
+    const abLenSq = ABx * ABx + ABy * ABy;
+    if (abLenSq === 0) continue;
+
+    let t = (APx * ABx + APy * ABy) / abLenSq;
+    t = Math.max(0, Math.min(1, t));
+
+    const projX = A.x + t * ABx;
+    const projY = A.y + t * ABy;
+
+    const dx = P.x - projX;
+    const dy = P.y - projY;
+    const distSq = dx * dx + dy * dy;
+
+    if (distSq < minDistSq) {
+      minDistSq = distSq;
+      closestPoint = metersToLatLng(projX, projY, refLat);
+    }
+  }
+
+  return closestPoint; // { lat, lng }
 }

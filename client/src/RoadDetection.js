@@ -1,42 +1,45 @@
-import React from 'react';
-import { Marker, Circle } from '@react-google-maps/api';
-import { useStore } from './useStore';
+import React, { useState, useEffect } from 'react';
+import { Polyline } from '@react-google-maps/api';
+import { snapPointToPolyline } from './PolylineUtils';
 
-export default function RoadDetection({ onSelectRoad }) {
-  const nearestRoad = useStore((s) => s.nearestRoad);
+const SmartRoad = ({ segment, onSelectRoad }) => {
+  // segment is now a clean polyline from backend directions API
+  // No need for client-side DirectionService calls or clipping logic as backend handles 150m radius search
 
-  if (!nearestRoad) return null;
+  if (!segment || segment.length < 2) return null;
+
+  return (
+    <Polyline
+      path={segment}
+      options={{
+        strokeColor: '#000000', // Color doesn't matter much if opacity is 0, but useful for debug
+        strokeOpacity: 0,       // Invisible
+        strokeWeight: 22,       // Wide hit area
+        zIndex: 5,
+        clickable: true
+      }}
+      onClick={(e) => {
+        const anchor = snapPointToPolyline(e.latLng, segment);
+        if (anchor) {
+          onSelectRoad(anchor, segment);
+        }
+      }}
+    />
+  );
+};
+
+export default function RoadDetection({ roads, onSelectRoad }) {
+  if (!roads || roads.length === 0) return null;
 
   return (
     <>
-      <Circle
-        center={nearestRoad}
-        radius={15}
-        options={{
-          fillColor: '#1976D2',
-          fillOpacity: 0.4,
-          strokeColor: '#1976D2',
-          strokeWeight: 3,
-          strokeOpacity: 1,
-          zIndex: 10,
-          clickable: true
-        }}
-        onClick={() => onSelectRoad(nearestRoad)}
-      />
-      <Marker
-        position={nearestRoad}
-        label={{ text: 'ROAD', color: '#fff', fontWeight: '700', fontSize: '11px' }}
-        icon={{
-          path: 'M0,0 L0,-10 L-5,-15 L5,-15 Z',
-          fillColor: '#1976D2',
-          fillOpacity: 1,
-          strokeColor: '#fff',
-          strokeWeight: 2,
-          scale: 1.2,
-          anchor: window.google?.maps ? new window.google.maps.Point(0, 0) : undefined
-        }}
-        onClick={() => onSelectRoad(nearestRoad)}
-      />
+      {roads.map((road, index) => (
+        <SmartRoad
+          key={`road-${index}`}
+          segment={road}
+          onSelectRoad={onSelectRoad}
+        />
+      ))}
     </>
   );
 }

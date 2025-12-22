@@ -8,6 +8,11 @@ export const nearestRoad = async (lat, lng) => {
   return data?.road_point;
 };
 
+export const fetchNearbyRoads = async (lat, lng, radius = 100) => {
+  const { data } = await api.get('/api/roads/nearby', { params: { lat, lng, radius } });
+  return data?.roads || [];
+};
+
 export const nearbyAddresses = async (lat, lng, radius = 50) => {
   const { data } = await api.get('/api/addresses/nearby', { params: { lat, lng, radius } });
   return data?.results || [];
@@ -65,5 +70,57 @@ export const completeDeliverySession = async (sessionId, payload) => {
 
 export const fetchDeliverySummary = async (days = 7) => {
   const { data } = await api.get('/api/delivery/summary', { params: { days } });
+  return data;
+};
+
+// --- New Residence & Auth APIs ---
+
+export const checkApartmentName = async (query) => {
+  const { data } = await api.post('/api/residence/check-apartment-name', { query });
+  return data?.results || [];
+};
+
+export const getPincodeDetails = async (pincode) => {
+  const { data } = await api.get(`/api/residence/pincode/${pincode}`);
+  return data;
+};
+
+export const createResidence = async (payload) => {
+  const { data } = await api.post('/api/residence/create', payload);
+  return data;
+};
+
+export const sendAuthOtp = async (phone) => {
+  const { data } = await api.post('/api/auth/send-otp', { phone });
+  return data;
+};
+
+export const verifyAuthOtp = async (phone, otp) => {
+  const { data } = await api.post('/api/auth/verify-otp', { phone, otp });
+  return data;
+};
+
+export const addResidenceProfile = async (id, payload) => {
+  const { data } = await api.post(`/api/residence/${id}/profiles`, payload);
+  return data;
+};
+
+export const getResidenceByCode = async (code) => {
+  const { data } = await api.get(`/api/residence/code/${code}`);
+  return data;
+};
+
+export const sendEditOtp = async (id) => {
+  const { data } = await api.post(`/api/residence/${id}/edit-otp`);
+  return data;
+};
+
+export const verifyEditOtp = async (id, otp) => {
+  const { data } = await api.post(`/api/residence/${id}/verify-edit`, { otp });
+  return data;
+};
+
+export const updateResidence = async (id, payload) => {
+  const { data } = await api.put(`/api/residence/${id}`, payload);
   return data;
 };

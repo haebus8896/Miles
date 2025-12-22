@@ -21,6 +21,9 @@ const serializeAddress = (doc) => ({
   road_point: doc.road_point
     ? { lat: doc.road_point.coordinates[1], lng: doc.road_point.coordinates[0] }
     : null,
+  source: doc.source
+    ? { lat: doc.source.coordinates[1], lng: doc.source.coordinates[0] }
+    : null,
   destination_point: doc.destination_point
     ? { lat: doc.destination_point.coordinates[1], lng: doc.destination_point.coordinates[0] }
     : null,
@@ -41,6 +44,33 @@ const normalizeLatLng = (point = {}) => {
   };
 };
 
+const Residence = require('../models/Residence');
+
+const serializeResidence = (doc) => ({
+  id: doc._id,
+  code: doc.smartAddressCode,
+  type: doc.type,
+  official_address: [
+    doc.address.houseNumber,
+    doc.apartmentDetails?.name,
+    doc.address.area,
+    doc.address.city
+  ].filter(Boolean).join(', '),
+  landmark: doc.address.landmark,
+  locality: doc.address.area,
+  city: doc.address.city,
+  postal_code: doc.address.pincode,
+  route_length_meters: doc.address.route_length_meters,
+  road_point: doc.address.road_point
+    ? { lat: doc.address.road_point.coordinates[1], lng: doc.address.road_point.coordinates[0] }
+    : null,
+  destination_point: doc.address.destination_point
+    ? { lat: doc.address.destination_point.coordinates[1], lng: doc.address.destination_point.coordinates[0] }
+    : null,
+  polyline_smoothed: doc.address.polyline_smoothed,
+  createdAt: doc.createdAt
+});
+
 exports.createAddress = async (req, res) => {
   const {
     official_address,
@@ -54,6 +84,7 @@ exports.createAddress = async (req, res) => {
     tags = [],
     door_photo = '',
     polyline = [],
+    source,
     road_point,
     destination_point,
     owner_full_name = '',
@@ -64,8 +95,8 @@ exports.createAddress = async (req, res) => {
   const destinationPoint = destination_point
     ? normalizeLatLng(destination_point)
     : lastPolylinePoint
-    ? normalizeLatLng(lastPolylinePoint)
-    : null;
+      ? normalizeLatLng(lastPolylinePoint)
+      : null;
   if (!destinationPoint) {
     throw new Error('destination_point or polyline end point is required');
   }
@@ -100,6 +131,7 @@ exports.createAddress = async (req, res) => {
     tags,
     door_photo,
     route_length_meters: route.lengthMeters,
+    source: source ? toPoint(source.lat, source.lng) : undefined,
     road_point: toPoint(roadPoint.lat, roadPoint.lng),
     destination_point: toPoint(destinationPoint.lat, destinationPoint.lng),
     polyline_raw: route.raw,
@@ -150,15 +182,58 @@ exports.updateAddress = async (req, res) => {
 
 exports.getAddressByCode = async (req, res) => {
   const { codeOrId } = req.params;
-  const query = codeOrId.match(/^[0-9a-fA-F]{24}$/)
-    ? { _id: codeOrId }
-    : { code: codeOrId.toUpperCase() };
-  const doc = await Address.findOne(query);
-  if (!doc) {
-    return res.status(404).json({ error: 'Address not found' });
+  const isObjectId = codeOrId.match(/^[0-9a-fA-F]{24}$/);
+
+  // 1. Try finding in Address (Legacy)
+  const query = isObjectId ? { _id: codeOrId } : { code: codeOrId.toUpperCase() };
+  let doc = await Address.findOne(query);
+
+  if (doc) {
+    return res.json({ address: serializeAddress(doc) });
   }
-  res.json({ address: serializeAddress(doc) });
+
+  // 2. Try finding in AddressRecord (New Smart Address)
+  // Smart Addresses use a different code format usually, but we check both.
+  const recordQuery = isObjectId ? { _id: codeOrId } : { smartAddressCode: codeOrId.toUpperCase() };
+  const recordDoc = await AddressRecord.findOne(recordQuery);
+
+  if (recordDoc) {
+    // Map AddressRecord to the schema expected by the navigation app
+    const serialized = serializeAddressRecord(recordDoc);
+    // Explicitly set `code` to smartAddressCode for compatibility
+    serialized.code = recordDoc.smartAddressCode;
+    return res.json({ address: serialized });
+  }
+
+  return res.status(404).json({ error: 'Address not found' });
 };
+
+const AddressRecord = require('../models/AddressRecord');
+
+const serializeAddressRecord = (doc) => ({
+  id: doc._id,
+  code: doc.smartAddressCode,
+  type: doc.residenceType,
+  official_address: [
+    doc.addressDetails.houseNumber,
+    doc.apartmentDetails?.name,
+    doc.addressDetails.area,
+    doc.addressDetails.city
+  ].filter(Boolean).join(', '),
+  landmark: doc.addressDetails.landmark,
+  locality: doc.addressDetails.area,
+  city: doc.addressDetails.city,
+  postal_code: doc.addressDetails.pincode,
+  route_length_meters: doc.route_length_meters,
+  road_point: doc.road_point
+    ? { lat: doc.road_point.coordinates[1], lng: doc.road_point.coordinates[0] }
+    : null,
+  destination_point: doc.destination_point
+    ? { lat: doc.destination_point.coordinates[1], lng: doc.destination_point.coordinates[0] }
+    : null,
+  polyline_smoothed: doc.polylineOptimized, // AddressRecord uses polylineOptimized
+  createdAt: doc.createdAt
+});
 
 exports.getNearby = async (req, res) => {
   const lat = parseFloat(req.query.lat);
@@ -169,16 +244,47 @@ exports.getNearby = async (req, res) => {
     return res.status(400).json({ error: 'lat/lng required' });
   }
 
-  const docs = await Address.find({
-    destination_point: {
-      $nearSphere: {
-        $geometry: toPoint(lat, lng),
-        $maxDistance: radius
-      }
-    }
-  }).limit(50);
+  try {
+    const [addresses, residences, addressRecords] = await Promise.all([
+      Address.find({
+        destination_point: {
+          $nearSphere: {
+            $geometry: toPoint(lat, lng),
+            $maxDistance: radius
+          }
+        }
+      }).limit(50),
+      Residence.find({
+        'address.destination_point': {
+          $nearSphere: {
+            $geometry: toPoint(lat, lng),
+            $maxDistance: radius
+          }
+        }
+      }).limit(50),
+      AddressRecord.find({
+        'destination_point': {
+          $nearSphere: {
+            $geometry: toPoint(lat, lng),
+            $maxDistance: radius
+          }
+        }
+      }).limit(50)
+    ]);
 
-  res.json({ results: docs.map(serializeAddress) });
+    console.log(`[DEBUG] Found ${addresses.length} Addresses, ${residences.length} Residences, ${addressRecords.length} AddressRecords`);
+
+    const results = [
+      ...addresses.map(serializeAddress),
+      ...residences.map(serializeResidence),
+      ...addressRecords.map(serializeAddressRecord)
+    ];
+
+    res.json({ results });
+  } catch (err) {
+    console.error('Error fetching nearby addresses:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 };
 
 exports.checkDuplicate = async (req, res) => {

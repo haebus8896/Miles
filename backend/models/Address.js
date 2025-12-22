@@ -34,6 +34,7 @@ const AddressSchema = new mongoose.Schema(
     tags: { type: [String], default: [] },
     door_photo: { type: String, default: '' }, // stores a base64 or remote URL
     route_length_meters: { type: Number, default: 0 },
+    source: { type: PointSchema, required: false }, // user's starting location (optional)
     road_point: { type: PointSchema, required: true }, // start of last-mile (labelled road)
     destination_point: { type: PointSchema, required: true }, // destination (door)
     polyline_raw: { type: [PolylinePointSchema], default: [] }, // [{lat,lng}, ...]
