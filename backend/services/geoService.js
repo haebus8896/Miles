@@ -150,7 +150,11 @@ function getCircleIntersection(A, B, C, R_meters) {
 
 async function findNearbyRoads({ lat, lng, radiusMeters = 100 }) {
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
-  if (!apiKey) return [];
+  if (!apiKey) {
+    console.error('❌ [geoService] FATAL: GOOGLE_MAPS_API_KEY is missing from process.env!');
+    console.error('👉 Make sure you created backend/.env and restarted pm2.');
+    return [];
+  }
 
   // Strategy: Dispersed Origins to catch parallel/nearby roads
   // 1 Center + 4 Offsets (30m N, S, E, W)
@@ -192,7 +196,10 @@ async function findNearbyRoads({ lat, lng, radiusMeters = 100 }) {
           travelMode: 'DRIVING',
           key: apiKey
         }
-      }).then(res => res.data).catch(e => null)
+      }).then(res => res.data).catch(e => {
+        console.error(`⚠️ [geoService] Google API Error:`, e.response?.data || e.message);
+        return null;
+      })
     );
 
     const batchResults = await Promise.all(batchPromises);
