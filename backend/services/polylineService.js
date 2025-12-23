@@ -1,4 +1,5 @@
-const turf = require('@turf/turf');
+const { lineString } = require('@turf/helpers');
+const length = require('@turf/length').default;
 
 const toLatLng = (point) => ({ lat: Number(point.lat), lng: Number(point.lng) });
 
@@ -41,8 +42,8 @@ const chaikinSmooth = (points, iterations = 2) => {
 
 const computeLengthMeters = (points) => {
   if (!points || points.length < 2) return 0;
-  const line = turf.lineString(points.map((p) => [p.lng, p.lat]));
-  return turf.length(line, { units: 'meters' });
+  const line = lineString(points.map((p) => [p.lng, p.lat]));
+  return length(line, { units: 'meters' });
 };
 
 const buildRouteArtifacts = ({ rawPoints, roadPoint, destinationPoint }) => {
