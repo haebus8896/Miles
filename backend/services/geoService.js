@@ -214,7 +214,11 @@ async function findNearbyRoads({ lat, lng, radiusMeters = 100 }) {
   const center = { lat, lng };
 
   for (const data of results) {
-    if (!data || data.status !== 'OK' || !data.routes || !data.routes[0]) continue;
+    if (!data || data.status !== 'OK') {
+      if (data?.status) console.error(`⚠️ [geoService] Google API Status: ${data.status}`, data.error_message);
+      continue;
+    }
+    if (!data.routes || !data.routes[0]) continue;
 
     const route = data.routes[0];
     // Use steps for High-Res geometry
