@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { GoogleMap, Marker, Circle, Polyline } from '@react-google-maps/api';
+import { GoogleMap, Marker, Circle, Polyline, StreetViewPanorama } from '@react-google-maps/api';
 import { useStore } from './useStore';
 import DrawingLayer from './DrawingLayer';
 import RoadDetection from './RoadDetection';
@@ -26,6 +26,63 @@ export default function MapScreen({ isLoaded, loadError }) {
   */
 
   const mapRef = useRef(null);
+  const streetViewRef = useRef(null);
+
+  /* isCropping: User is adjusting the frame with an overlay */
+  const [isCropping, setIsCropping] = useState(false);
+  const viewfinderRef = useRef(null);
+
+  const handleCaptureStreetView = useCallback(async () => {
+    if (!streetViewRef.current) return;
+    const pov = streetViewRef.current.getPov();
+    const pos = streetViewRef.current.getPosition();
+
+    // Calculate simulated FOV based on Zoom if needed, but standard is fine.
+    // Ideally we'd zoom in the Static API based on the crop box ratio, 
+    // but the API deals in FOV (max 120, min ~10). 
+    // If user zoomed in SV, `zoom` property is available.
+    // streetViewRef.current.getZoom() returns 0-3 usually.
+    // Formula: fov = 180 / (2^zoom) roughly.
+    const zoom = streetViewRef.current.getZoom() || 1;
+    const fov = Math.max(10, Math.min(120, 180 / Math.pow(2, zoom)));
+
+    // Dynamic Size from Viewfinder
+    let size = "600x400"; // Fallback
+    if (viewfinderRef.current) {
+      const w = viewfinderRef.current.clientWidth;
+      const h = viewfinderRef.current.clientHeight;
+      // Cap max size for Standard Plan (640x640) - or assume Premium/Scale
+      // For safety, let's cap at 640 for width/height or use scale=2 if small
+      const safeW = Math.min(640, w);
+      const safeH = Math.min(640, h);
+      size = `${safeW}x${safeH}`;
+    }
+
+    if (pos && pov) {
+      // MUST append API Key
+      const apiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
+      const url = `https://maps.googleapis.com/maps/api/streetview?size=${size}&location=${pos.lat()},${pos.lng()}&heading=${pov.heading}&pitch=${pov.pitch}&fov=${fov}&key=${apiKey}`;
+      console.log("Capturing Street View URL:", url);
+
+      try {
+        // Fetch as Blob (Save as JPG)
+        // Note: Google Static Maps API usually allows CORS.
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Network response was not ok');
+        const blob = await response.blob();
+        const file = new File([blob], `streetview_${Date.now()}.jpg`, { type: "image/jpeg" });
+
+        useStore.getState().setStreetView({ visible: false, capturedUrl: file });
+        setIsCropping(false);
+      } catch (err) {
+        console.error("Failed to capture street view blob", err);
+        // Fallback: Use the URL string, but it MUST have the key to work in an <img> tag
+        // URL already has key appended above.
+        useStore.getState().setStreetView({ visible: false, capturedUrl: url });
+        setIsCropping(false);
+      }
+    }
+  }, []);
   const [mapType, setMapType] = useState('hybrid');
   const [locating, setLocating] = useState(false);
   const [status, setStatus] = useState('Tap "Find my location" to begin.');
@@ -302,21 +359,18 @@ export default function MapScreen({ isLoaded, loadError }) {
         mapTypeId={mapType}
       >
         {userLocation && (
-          <>
-            <Marker
-              position={userLocation}
-              label={{ text: 'You', color: '#fff', fontWeight: '700' }}
-              icon={{
-                path: googleMaps?.SymbolPath.CIRCLE,
-                scale: 6,
-                fillColor: '#4C6FFF', // Primary Accent
-                fillOpacity: 1,
-                strokeColor: '#fff',
-                strokeWeight: 2
-              }}
-            />
-
-          </>
+          <Marker
+            position={userLocation}
+            label={{ text: 'You', color: '#fff', fontWeight: '700' }}
+            icon={{
+              path: googleMaps?.SymbolPath.CIRCLE,
+              scale: 6,
+              fillColor: '#4C6FFF', // Primary Accent
+              fillOpacity: 1,
+              strokeColor: '#fff',
+              strokeWeight: 2
+            }}
+          />
         )}
 
         {referencePoint && (
@@ -393,77 +447,121 @@ export default function MapScreen({ isLoaded, loadError }) {
             onClick={() => handleFocusAddress(addr)}
           />
         ))}
+        {/* Street View Integration */}
+        <StreetViewPanorama
+          visible={useStore.getState().streetView.visible}
+          position={useStore.getState().streetView.position || userLocation}
+          options={{
+            pov: useStore.getState().streetView.pov,
+            visible: useStore.getState().streetView.visible,
+            motionTracking: false,
+            motionTrackingControl: false,
+            addressControl: false,
+            fullscreenControl: false
+          }}
+          onLoad={(pano) => { streetViewRef.current = pano; }}
+          onCloseclick={() => useStore.getState().setStreetView({ visible: false })}
+        />
+
+        {/* Viewfinder Overlay - Visible ONLY during Cropping (Inside Map to overlay SV) */}
+        {useStore.getState().streetView.visible && isCropping && (
+          <div className="viewfinder-overlay">
+            <div className="viewfinder-box" ref={viewfinderRef}></div>
+          </div>
+        )}
       </GoogleMap>
 
+      {/* Map Overlays Container (Interactive UI Layers) */}
       <div className="map-overlay">
-        <div className="glass-overlay">
-          <h4>Doorstep route</h4>
-          <p>
-            1) Locate yourself, 2) tap the road, 3) draw the lane exactly the way riders should follow it.
-          </p>
-          <div className="map-tools">
-            <button className={`pill ${drawing ? 'active' : ''}`} onClick={handleToggleDrawing} title="Draw Route">
-              {/* Pen Icon - Clearer for "Draw" */}
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
-                <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
-              </svg>
-            </button>
-            <button className="pill" onClick={handleSmoothRoute} disabled={!polyline || polyline.length < 3} title="Smooth Route">
-              {/* Curve Icon - Clearer for "Smooth" */}
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 12c3-4 6-7 9-7s9 5 9 12"></path>
-              </svg>
-            </button>
-            <button className="pill" onClick={handleUndo} disabled={!polyline || polyline.length === 0} title="Undo">
-              {/* Back Arrow - Standard Undo */}
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 14L4 9l5-5"></path>
-                <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"></path>
-              </svg>
-            </button>
-            <button className="pill" onClick={handleClear} disabled={!polyline.length && !selectedRoadPoint} title="Reset">
-              {/* Refresh/X Icon - Clearer for "Reset" than Trash */}
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M23 4v6h-6"></path>
-                <path d="M1 20v-6h6"></path>
-                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-              </svg>
-            </button>
-          </div>
-          <div className="map-status">
-            <span className="ok">{formatDistance(routeDistance)}</span>
-            <span className="warn">{polyline ? polyline.length : 0} pts</span>
-            <span className="warn">{routeReady ? 'Route ready' : 'Pending'}</span>
-          </div>
-          <p style={{ marginTop: 10 }}>{status}</p>
-          {savedAddress && (
-            <div className="map-status">
-              <span className="ok">Saved as {savedAddress.code}</span>
-            </div>
-          )}
+        {/* 1. Context Hint (Top Center) */}
+        <div className="context-hint" style={{
+          position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)',
+          background: 'rgba(0,0,0,0.7)', color: 'white', padding: '8px 16px', borderRadius: 20,
+          fontSize: '13px', fontWeight: '500', pointerEvents: 'none', whiteSpace: 'nowrap',
+          zIndex: 50, transition: 'opacity 0.3s',
+          opacity: (useStore.getState().streetView.visible || drawing || !selectedRoadPoint) ? 1 : 0
+        }}>
+          {useStore.getState().streetView.visible
+            ? (isCropping ? "Resize box to frame house -> Click Save" : "Pan & Zoom to view house -> Click Crop")
+            : (drawing
+              ? "Tap road to extend path -> Click Save"
+              : (!selectedRoadPoint ? "Tap a road segment to begin" : "Check form details"))
+          }
         </div>
+
+        {/* 2. Map Tools (Bottom Left) - Hidden during Street View */}
+        {!useStore.getState().streetView.visible && (
+          <div className="glass-overlay">
+            <h4>Doorstep route</h4>
+            <p>
+              1) Locate yourself, 2) tap the road, 3) draw the lane exactly the way riders should follow it.
+            </p>
+            <div className="map-tools">
+              <button className={`pill ${drawing ? 'active' : ''}`} onClick={handleToggleDrawing} title="Draw Route">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19l7-7 3 3-7 7-3-3z"></path><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path></svg>
+              </button>
+              <button className="pill" onClick={handleSmoothRoute} disabled={!polyline || polyline.length < 3} title="Smooth Route">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12c3-4 6-7 9-7s9 5 9 12"></path></svg>
+              </button>
+              <button className="pill" onClick={handleUndo} disabled={!polyline || polyline.length === 0} title="Undo">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14L4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"></path></svg>
+              </button>
+              <button className="pill" onClick={handleClear} disabled={!polyline.length && !selectedRoadPoint} title="Reset">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+              </button>
+            </div>
+            <div className="map-status">
+              <span className="ok">{formatDistance(routeDistance)}</span>
+              <span className="warn">{polyline ? polyline.length : 0} pts</span>
+              <span className="warn">{routeReady ? 'Route ready' : 'Pending'}</span>
+            </div>
+            <p style={{ marginTop: 10 }}>{status}</p>
+            {savedAddress && (
+              <div className="map-status">
+                <span className="ok">Saved as {savedAddress.code}</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="floating-actions">
         <button className="primary" onClick={handleFindMyLocation} disabled={locating} title="Find My Location">
-          {/* Target Icon */}
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="22" y1="12" x2="18" y2="12"></line>
-            <line x1="6" y1="12" x2="2" y2="12"></line>
-            <line x1="12" y1="6" x2="12" y2="2"></line>
-            <line x1="12" y1="22" x2="12" y2="18"></line>
-          </svg>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="22" y1="12" x2="18" y2="12"></line><line x1="6" y1="12" x2="2" y2="12"></line><line x1="12" y1="6" x2="12" y2="2"></line><line x1="12" y1="22" x2="12" y2="18"></line></svg>
         </button>
         <button onClick={handleMapTypeToggle} title="Switch Map View">
-          {/* Layers Icon */}
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-            <polyline points="2 17 12 22 22 17"></polyline>
-            <polyline points="2 12 12 17 22 12"></polyline>
-          </svg>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
         </button>
+        {useStore.getState().streetView.visible && (
+          <>
+            {/* Mode 1: View Open, deciding to Crop */}
+            {!isCropping && (
+              <>
+                <button className="action-btn" onClick={() => setIsCropping(true)} title="Crop / Adjust Frame" style={{ background: '#FF9800', color: 'white', marginTop: 10 }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M6.13 1L6 16a2 2 0 0 0 2 2h15"></path>
+                    <path d="M1 6.13L16 6a2 2 0 0 1 2 2v15"></path>
+                  </svg>
+                </button>
+                <button className="action-btn danger" onClick={() => useStore.getState().setStreetView({ visible: false })} title="Exit" style={{ background: '#d32f2f', color: 'white', marginTop: 10 }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+              </>
+            )}
+
+            {/* Mode 2: Cropping Active */}
+            {isCropping && (
+              <>
+                <button className="action-btn success" onClick={handleCaptureStreetView} title="Save / Snap" style={{ background: '#2e7d32', color: 'white', marginTop: 10 }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                </button>
+                <button className="action-btn danger" onClick={() => setIsCropping(false)} title="Cancel Crop" style={{ background: '#757575', color: 'white', marginTop: 10 }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14L4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"></path></svg>
+                </button>
+              </>
+            )}
+          </>
+        )}
       </div>
 
       {nearbyList && nearbyList.length > 0 && (

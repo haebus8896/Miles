@@ -14,3 +14,10 @@ dist/
 .cache/
 .mongodb/
 
+
+# OS
+.DS_Store
+
+# Archives
+*.tar.gz
+*.zip

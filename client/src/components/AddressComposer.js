@@ -37,8 +37,18 @@ export default function AddressComposer({ initialData, onSaveSuccess }) {
   const userLocation = useStore((state) => state.userLocation);
   const setPolyline = useStore((state) => state.setPolyline);
   const setSelectedRoadPoint = useStore((state) => state.setSelectedRoadPoint);
+  const streetView = useStore((state) => state.streetView);
+  const setStreetView = useStore((state) => state.setStreetView);
 
-  // Local State
+  // Sync Street View Capture
+  const [previewImage, setPreviewImage] = useState(null);
+  useEffect(() => {
+    if (streetView.capturedUrl) {
+      setFormData(prev => ({ ...prev, gateImage: streetView.capturedUrl }));
+      // Clear capturedUrl from store to prevent loop if re-opening? Or keep it?
+      // Let's keep it, but maybe we only set if different.
+    }
+  }, [streetView.capturedUrl]);
   // Steps: 
   // 1. Type
   // 2. Apartment Details (Only if Apt)
@@ -285,7 +295,8 @@ export default function AddressComposer({ initialData, onSaveSuccess }) {
         setSuccessData({
           code: res.addressCode,
           household: res.household,
-          addressId: res.addressId
+          addressId: res.addressId,
+          quality_score: res.quality_score // Capture from API
         });
       }
     } catch (err) {
@@ -376,6 +387,21 @@ export default function AddressComposer({ initialData, onSaveSuccess }) {
             }}>
               {successData.code}
             </div>
+
+            {successData.quality_score && (
+              <div className="aqs-card" style={{ padding: 15, border: '1px solid #eee', borderRadius: 8, margin: '20px 0' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <strong>Address Quality Score</strong>
+                  <span className={`grade-badge ${successData.quality_score.grade}`}>
+                    {successData.quality_score.score} / 100
+                  </span>
+                </div>
+                <div style={{ fontSize: '12px', color: '#666', marginTop: 5 }}>
+                  Grade: {successData.quality_score.grade || 'POOR'}
+                  {successData.quality_score.score < 60 && ' (Needs Improvement)'}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="house-profile">
@@ -457,6 +483,38 @@ export default function AddressComposer({ initialData, onSaveSuccess }) {
     <section className="panel card">
       <div className="panel-header">
         <h3>Create Smart Address</h3>
+      </div>
+
+      {/* Visual Progress Bar */}
+      <div className="progress-bar-container" style={{ margin: '10px 0 20px', padding: '0 10px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+          {['Type', 'Details', 'Location', 'Route', 'Verify'].map((label, idx) => {
+            const stepNum = idx + 1;
+            const isActive = activeStep === stepNum;
+            const isCompleted = activeStep > stepNum;
+            return (
+              <div key={idx} style={{ textAlign: 'center', flex: 1, position: 'relative' }}>
+                <div style={{
+                  width: 24, height: 24, borderRadius: '50%', margin: '0 auto',
+                  background: isCompleted ? '#10B981' : (isActive ? '#3B82F6' : '#E5E7EB'),
+                  color: isCompleted || isActive ? 'white' : '#9CA3AF',
+                  fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold',
+                  zIndex: 2, position: 'relative'
+                }}>
+                  {isCompleted ? '✓' : stepNum}
+                </div>
+                <div style={{ fontSize: 9, marginTop: 4, color: isActive ? '#3B82F6' : '#9CA3AF', fontWeight: isActive ? '700' : '400' }}>{label}</div>
+                {/* Connector Line */}
+                {idx < 4 && (
+                  <div style={{
+                    position: 'absolute', top: 12, left: '50%', width: '100%', height: 2,
+                    background: isCompleted ? '#10B981' : '#E5E7EB', zIndex: 0
+                  }} />
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <div className="steps-container">
@@ -578,10 +636,10 @@ export default function AddressComposer({ initialData, onSaveSuccess }) {
               <input className="modern-input" name="pincode" value={formData.pincode} onChange={handlePincode} maxLength={6} placeholder="110001" />
             </Field>
             <Field label="City" required>
-              <input className="modern-input" name="city" value={formData.city} readOnly placeholder="Auto-filled" />
+              <input className="modern-input" name="city" value={formData.city} onChange={handleInput} placeholder="City" />
             </Field>
             <Field label="State" required>
-              <input className="modern-input" name="state" value={formData.state} readOnly placeholder="Auto-filled" />
+              <input className="modern-input" name="state" value={formData.state} onChange={handleInput} placeholder="State" />
             </Field>
             <Field label={residenceType === 'villa' ? "House No." : "Flat No."} required>
               <input className="modern-input" name="houseNumber" value={formData.houseNumber} onChange={handleInput} placeholder="#" />
@@ -602,11 +660,68 @@ export default function AddressComposer({ initialData, onSaveSuccess }) {
 
           <div className="form-grid" style={{ marginTop: 20, borderTop: '1px solid #eee', paddingTop: 10 }}>
             <Field label="Gate Image (For Delivery)">
-              <label className="upload-box">
-                {formData.gateImage ? 'Image Selected' : 'Tap to upload Gate Image'}
-                <input type="file" name="gateImage" onChange={handleFileChange} accept="image/*" style={{ display: 'none' }} />
-              </label>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <label className="upload-box" style={{ flex: 1 }}>
+                  {formData.gateImage
+                    ? (typeof formData.gateImage === 'string' && formData.gateImage.includes('streetview')
+                      ? 'Street View Captured'
+                      : (formData.gateImage instanceof File ? 'Street View/Image Saved' : 'Image Uploaded'))
+                    : 'Upload Photo'}
+                  <input type="file" name="gateImage" onChange={handleFileChange} accept="image/*" style={{ display: 'none' }} />
+                </label>
+
+                <button
+                  className="upload-box"
+                  style={{ flex: 1, background: '#f0f8ff', border: '1px dashed #2196f3', color: '#2196f3', opacity: streetView.visible ? 0.5 : 1 }}
+                  disabled={streetView.visible}
+                  onClick={() => {
+                    if (selectedRoadPoint) {
+                      setStreetView({ visible: true, position: selectedRoadPoint });
+                    } else {
+                      alert("Please select a Road Point on the map first!");
+                    }
+                  }}
+                >
+                  {streetView.visible ? 'Check Map to Capture' : 'Capture Street View'}
+                </button>
+              </div>
+              {formData.gateImage && (
+                <div style={{ marginTop: 5, display: 'flex', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewImage(formData.gateImage)}
+                    style={{ fontSize: '10px', padding: '4px 8px', background: '#eee', border: 'none', borderRadius: 4, cursor: 'pointer', color: '#555' }}
+                  >
+                    View Saved Image
+                  </button>
+                </div>
+              )}
             </Field>
+
+            {previewImage && (
+              <div style={{
+                position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                background: 'rgba(0,0,0,0.85)', zIndex: 9999,
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'
+              }}>
+                {/* Render logic: ObjectURL for File/Blob, String for URL */}
+                <img
+                  src={(previewImage instanceof File || previewImage instanceof Blob) ? URL.createObjectURL(previewImage) : previewImage}
+                  alt="Gate Preview"
+                  style={{ maxWidth: '90%', maxHeight: '70%', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.5)', background: '#fff' }}
+                  onError={(e) => { e.target.style.display = 'none'; alert('Failed to load image preview. Please try capturing again.'); }}
+                />
+                <div style={{ marginTop: 20, display: 'flex', gap: 10 }}>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewImage(null)}
+                    style={{ padding: '8px 20px', background: 'white', border: 'none', borderRadius: 20, fontWeight: 'bold' }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            )}
             <Field label="Audio Instructions">
               <label className="upload-box">
                 {formData.audioInstruction ? 'Audio Selected' : 'Tap to upload Audio'}

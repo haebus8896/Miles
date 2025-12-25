@@ -29,6 +29,9 @@ app.use(tenantMiddleware);
 app.use('/api/auth', require('./api/auth/routes'));
 app.use('/api/addresses', require('./address-engine/routes'));
 app.use('/api/polylines', require('./polyline-engine/routes'));
+app.use('/api/ged', require('./ged-engine/routes'));
+app.use('/api/tracking', require('./tracking-engine/routes'));
+app.use('/api/riders', require('./rider/routes'));
 
 // Health Check
 app.get('/health', (req, res) => {

@@ -1,13 +1,32 @@
 const Address = require('../models/Address');
 const Joi = require('joi');
 
+const { calculateAQS } = require('../utils/aqsCalculator');
+
 // Validation Schemas
 const createAddressSchema = Joi.object({
     latitude: Joi.number().required(),
     longitude: Joi.number().required(),
-    full_address: Joi.string().allow(''),
-    city: Joi.string(),
-    pincode: Joi.string(),
+
+    // Detailed fields
+    house_no: Joi.string().required(),
+    floor_no: Joi.string().allow(''),
+    apartment_name: Joi.string().allow(''),
+    residence_type: Joi.string().valid('apartment', 'house', 'office').required(),
+    entrance_type: Joi.string().allow(''),
+    nearby_landmark: Joi.string().allow(''),
+    city: Joi.string().required(),
+    pincode: Joi.string().required(),
+
+    gate_image: Joi.object({
+        url: Joi.string(),
+        source: Joi.string().valid('upload', 'streetview'),
+        captured_at: Joi.date()
+    }),
+
+    // Associated spatial data for scoring
+    polyline_id: Joi.string().allow(''),
+
     metadata: Joi.object()
 });
 
@@ -21,16 +40,40 @@ exports.createAddress = async (req, res) => {
         return res.status(403).json({ error: 'Tenant context missing' });
     }
 
-    // 3. Create Address
+    // 3. Prepare Data for AQS
+    // merge user input with potential associated data (like polyline)
+    const addressPayload = {
+        ...value,
+        created_by: req.user ? req.user.name : 'Unknown', // Simplistic
+        is_phone_verified: true // Assume verified for now if auth passed
+    };
+
+    // 4. Calculate Score
+    const aqs = calculateAQS(addressPayload);
+
+    // 5. Create Address
     const address = await Address.create({
         tenant_id: req.tenant._id,
         location: {
             type: 'Point',
             coordinates: [value.longitude, value.latitude]
         },
-        full_address: value.full_address,
+
+        // Explicit mapping to schema
+        house_no: value.house_no,
+        floor_no: value.floor_no,
+        apartment_name: value.apartment_name,
+        residence_type: value.residence_type,
+        entrance_type: value.entrance_type,
+        nearby_landmark: value.nearby_landmark,
         city: value.city,
         pincode: value.pincode,
+
+        gate_image: value.gate_image,
+        polyline_id: value.polyline_id || null, // If provided linked immediately
+
+        quality_score: aqs, // Store the calculated object
+
         metadata: value.metadata,
         created_by: req.user ? req.user._id : null
     });

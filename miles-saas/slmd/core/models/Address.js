@@ -42,15 +42,37 @@ const addressSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Polyline'
     },
-    full_address: String,
-    city: String,
-    pincode: String,
+    // Detailed Address Fields
+    house_no: String,
+    floor_no: String,
+    apartment_name: String,
+    residence_type: String, // apartment, house, office
+    entrance_type: String, // main_gate, side_entry
+    nearby_landmark: String,
+
+    gate_image: {
+        url: String,
+        source: {
+            type: String,
+            enum: ['upload', 'streetview']
+        },
+        captured_at: Date
+    },
+
+    is_phone_verified: { type: Boolean, default: false },
 
     quality_score: {
-        type: Number,
-        min: 0,
-        max: 100,
-        default: 80
+        score: { type: Number, default: 0 },
+        grade: { type: String, enum: ['EXCELLENT', 'ACCEPTABLE', 'POOR'], default: 'POOR' },
+        benchmark: { type: Number, default: 60 },
+        breakdown: {
+            structure: Number,
+            spatial: Number,
+            navigation: Number,
+            visual: Number,
+            verification: Number
+        },
+        calculated_at: Date
     },
 
     metadata: {

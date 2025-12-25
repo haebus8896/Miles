@@ -86,5 +86,11 @@ export const useStore = create((set) => ({
   resetRoute: () => set({ polyline: [], selectedRoadPoint: null, nearestRoad: null }),
 
   focusPoint: null,
-  setFocusPoint: (point) => set({ focusPoint: point })
+  setFocusPoint: (point) => set({ focusPoint: point }),
+
+  streetView: { visible: false, position: null, pov: { heading: 0, pitch: 0 }, capturedUrl: null },
+  setStreetView: (updater) =>
+    set((state) => ({
+      streetView: typeof updater === 'function' ? updater(state.streetView) : { ...state.streetView, ...updater }
+    }))
 }));

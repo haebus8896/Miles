@@ -17,6 +17,8 @@
   --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
+
+
 *,
 *::before,
 *::after {
@@ -863,4 +865,230 @@ body,
   font-size: 12px;
   color: #3B82F6;
   font-weight: 600;
+}
+
+@media (max-width: 768px) {
+
+  /* 1. Global Reset for Mobile */
+  .app-shell {
+    padding: 0;
+    gap: 0;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* 2. Main Layout: Stack Vertical */
+  .main-layout {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  /* 3. Map Region: Top Half (Fixed Height) */
+  .map-region {
+    flex: none;
+    height: 45vh;
+    /* Map takes top 45% */
+    order: 1;
+    /* Visual Top */
+    border-radius: 0 0 20px 20px;
+    /* Round bottom corners only */
+    z-index: 5;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  }
+
+  .map-region .gm-style {
+    border-radius: 0 0 20px 20px;
+  }
+
+  /* 4. Sidebar: Bottom Half (Scrollable Sheet) */
+  .sidebar {
+    flex: 1;
+    order: 2;
+    /* Visual Bottom */
+    padding: 20px;
+    background: #fff;
+    border-radius: 20px 20px 0 0;
+    /* Sheet look */
+    margin-top: -20px;
+    /* Slight overlap */
+    z-index: 10;
+    padding-bottom: 80px;
+    /* Space for bottom safe area */
+  }
+
+  /* 5. Header: Compact or Hidden */
+  .header {
+    display: none;
+    /* Hide huge header on mobile to save space */
+  }
+
+  /* Alternative: Compact Header */
+  /*
+  .header {
+    padding: 10px 16px;
+    border-radius: 0;
+  }
+  .header h1 { font-size: 20px; }
+  .header .muted, .header-actions { display: none; }
+  */
+
+  /* 6. Map Overlays: Reposition */
+  .map-overlay {
+    top: auto;
+    bottom: 30px;
+    /* Move controls to bottom of Map area */
+    left: 10px;
+    right: 10px;
+    width: auto;
+    max-width: none;
+    pointer-events: none;
+  }
+
+  .glass-overlay {
+    pointer-events: auto;
+    width: 100%;
+    max-width: none;
+    background: rgba(255, 255, 255, 0.95);
+    /* More solid on mobile */
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  /* Hide huge text on mobile map */
+  .glass-overlay p {
+    display: none;
+  }
+
+  .glass-overlay h4 {
+    margin: 0;
+    font-size: 14px;
+  }
+
+  /* 7. Floating Actions */
+  .floating-actions {
+    top: 10px;
+    right: 10px;
+  }
+
+  /* 8. Touch Targets */
+  .modern-input,
+  .control-btn,
+  .pill {
+    height: 48px;
+    /* Easier to tap */
+  }
+
+  .search-container {
+    margin-bottom: 10px;
+  }
+}
+
+/* Viewfinder for Street View Crop */
+.viewfinder-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.viewfinder-box {
+  width: 80%;
+  height: 40%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.4);
+  position: relative;
+  border-radius: 8px;
+  /* Resize requires overflow != visible */
+  resize: both;
+  overflow: auto;
+  pointer-events: auto;
+  /* ENABLE INTERACTION */
+  min-width: 200px;
+  min-height: 150px;
+  max-width: 90%;
+  max-height: 80%;
+}
+
+/* Custom Resize Handle Indicator (Visual Aid) */
+.viewfinder-box::before {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 20px;
+  height: 20px;
+  background: linear-gradient(135deg, transparent 50%, white 50%);
+  cursor: nwse-resize;
+  pointer-events: none;
+  /* Let the native resize handle work */
+}
+
+.viewfinder-box::after {
+  content: 'Adjust view to fit house here';
+  position: absolute;
+  bottom: -30px;
+  width: 100%;
+  text-align: center;
+  color: white;
+  font-weight: 600;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+}
+/* --- Mobile Responsive Layout --- */
+@media (max-width: 768px) {
+  .app-shell {
+    padding: 0;
+    height: 100vh;
+    overflow: hidden;
+  }
+  
+  .header {
+    display: none; /* Hide header on mobile to save space, or simplify it */
+  }
+
+  .main-layout {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .map-region {
+    flex: 1; /* Map takes remaining space */
+    border-radius: 0;
+  }
+
+  .sidebar {
+    height: 45vh;
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -4px 20px rgba(0,0,0,0.15);
+    z-index: 100;
+    padding: 16px;
+    background: white;
+    /* Allow scrolling within sheet */
+    overflow-y: auto;
+  }
+
+  /* Compact form elements for mobile */
+  .step-card {
+    border: none;
+    box-shadow: none;
+    padding: 0;
+  }
+  
+  .form-grid {
+    grid-template-columns: 1fr; /* Stack inputs */
+  }
+
+  .panel.card {
+     box-shadow: none; /* Flatten inside sheet */
+     padding: 0;
+  }
 }
