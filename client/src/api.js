@@ -1,6 +1,18 @@
 import axios from 'axios';
 
-const BASE = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
+const getBaseUrl = () => {
+  const envUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
+  if (typeof window === 'undefined') return envUrl;
+
+  if (window.location.hostname !== 'localhost' && envUrl.includes('localhost')) {
+    // If accessing via IP (LAN), pointing to localhost backend won't work.
+    // Replace localhost with the actual IP/hostname we are currently on.
+    return envUrl.replace('localhost', window.location.hostname);
+  }
+  return envUrl;
+};
+
+const BASE = getBaseUrl();
 export const api = axios.create({ baseURL: BASE, timeout: 20000 });
 
 export const nearestRoad = async (lat, lng) => {
