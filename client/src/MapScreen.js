@@ -64,23 +64,13 @@ export default function MapScreen({ isLoaded, loadError }) {
       const url = `https://maps.googleapis.com/maps/api/streetview?size=${size}&location=${pos.lat()},${pos.lng()}&heading=${pov.heading}&pitch=${pov.pitch}&fov=${fov}&key=${apiKey}`;
       console.log("Capturing Street View URL:", url);
 
-      try {
-        // Fetch as Blob (Save as JPG)
-        // Note: Google Static Maps API usually allows CORS.
-        const response = await fetch(url);
-        if (!response.ok) throw new Error('Network response was not ok');
-        const blob = await response.blob();
-        const file = new File([blob], `streetview_${Date.now()}.jpg`, { type: "image/jpeg" });
+      console.log("Capturing Street View URL:", url);
 
-        useStore.getState().setStreetView({ visible: false, capturedUrl: file });
-        setIsCropping(false);
-      } catch (err) {
-        console.error("Failed to capture street view blob", err);
-        // Fallback: Use the URL string, but it MUST have the key to work in an <img> tag
-        // URL already has key appended above.
-        useStore.getState().setStreetView({ visible: false, capturedUrl: url });
-        setIsCropping(false);
-      }
+      // Store the URL string directly.
+      // The backend expects a string (URL), and since we don't have a multipart upload flow for this feature yet,
+      // sending a File object via JSON results in "{}".
+      useStore.getState().setStreetView({ visible: false, capturedUrl: url });
+      setIsCropping(false);
     }
   }, []);
   const [mapType, setMapType] = useState('hybrid');
