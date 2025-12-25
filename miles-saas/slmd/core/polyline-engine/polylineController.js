@@ -27,6 +27,70 @@ exports.createPolyline = async (req, res) => {
         created_by: req.user ? req.user._id : null
     });
 
+    // --- Smart Landmark Refinement (Async) ---
+    // Background task to check for overlaps and learn landmarks
+    (async () => {
+        try {
+            // 1. Find nearby polylines (within 50m) to compare against
+            // Limit to last 50 to avoid performance hit
+            const nearbyPolylines = await Polyline.find({
+                tenant_id: req.tenant._id,
+                _id: { $ne: polyline._id }, // Exclude self
+                geometry: {
+                    $near: {
+                        $geometry: { type: 'Point', coordinates: value.coordinates[0] }, // Start point neighborhood
+                        $maxDistance: 50 // meters
+                    }
+                }
+            }).limit(50);
+
+            for (const neighbor of nearbyPolylines) {
+                const { overlapPercentage, intersectionCenter } = calculatePathOverlap(value.coordinates, neighbor.geometry.coordinates);
+
+                // If paths share > 60% geometry, we have a "Common Path"
+                if (overlapPercentage > 60 && intersectionCenter) {
+                    console.log(`[SmartRefinement] High overlap detected (${overlapPercentage.toFixed(1)}%) between ${polyline._id} and ${neighbor._id}`);
+
+                    // Create or Update Landmark at the intersection (Confluence)
+                    // Check if a landmark already exists near this intersection
+                    let landmark = await Landmark.findOne({
+                        tenant_id: req.tenant._id,
+                        location: {
+                            $near: {
+                                $geometry: intersectionCenter,
+                                $maxDistance: 20 // 20m radius for grouping
+                            }
+                        }
+                    });
+
+                    if (landmark) {
+                        // Strengthen existing landmark
+                        landmark.confidence_score += 1;
+                        landmark.last_updated_at = Date.now();
+                        if (!landmark.associated_routes.includes(polyline._id)) {
+                            landmark.associated_routes.push(polyline._id);
+                        }
+                        await landmark.save();
+                        console.log(`[SmartRefinement] Strengthened Landmark: ${landmark.name}`);
+                    } else {
+                        // Create new "Learned" Landmark
+                        const newLandmark = await Landmark.create({
+                            tenant_id: req.tenant._id,
+                            name: `Learned Node ${Date.now().toString().slice(-4)}`,
+                            location: intersectionCenter,
+                            confidence_score: 1,
+                            associated_routes: [polyline._id, neighbor._id],
+                            is_system_generated: true
+                        });
+                        console.log(`[SmartRefinement] Discovered New Landmark: ${newLandmark.name}`);
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('[SmartRefinement] Error calculating overlaps:', err);
+        }
+    })();
+
     res.status(201).json({ success: true, data: polyline });
 };
 

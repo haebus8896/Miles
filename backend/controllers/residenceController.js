@@ -181,7 +181,9 @@ exports.createResidence = async (req, res) => {
             apartmentDetails: type === 'apartment' ? apartmentDetails : undefined,
             addressDetails: {
                 ...address,
-                gateImageUrl: address.gateImageUrl,
+                gateImageUrl: (typeof address.gateImageUrl === 'object' && address.gateImageUrl?.url)
+                    ? address.gateImageUrl.url
+                    : address.gateImageUrl,
                 instructionsAudioUrl: address.instructionsAudioUrl
             },
             ...routeArtifacts,
