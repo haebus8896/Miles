@@ -285,7 +285,8 @@ export default function AddressComposer({ initialData, onSaveSuccess }) {
         setSuccessData({
           code: res.addressCode,
           household: res.household,
-          addressId: res.addressId
+          addressId: res.addressId,
+          quality_score: res.quality_score // Capture from API
         });
       }
     } catch (err) {
@@ -376,6 +377,21 @@ export default function AddressComposer({ initialData, onSaveSuccess }) {
             }}>
               {successData.code}
             </div>
+
+            {successData.quality_score && (
+              <div className="aqs-card" style={{ padding: 15, border: '1px solid #eee', borderRadius: 8, margin: '20px 0' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <strong>Address Quality Score</strong>
+                  <span className={`grade-badge ${successData.quality_score.grade}`}>
+                    {successData.quality_score.score} / 100
+                  </span>
+                </div>
+                <div style={{ fontSize: '12px', color: '#666', marginTop: 5 }}>
+                  Grade: {successData.quality_score.grade || 'POOR'}
+                  {successData.quality_score.score < 60 && ' (Needs Improvement)'}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="house-profile">
@@ -578,10 +594,10 @@ export default function AddressComposer({ initialData, onSaveSuccess }) {
               <input className="modern-input" name="pincode" value={formData.pincode} onChange={handlePincode} maxLength={6} placeholder="110001" />
             </Field>
             <Field label="City" required>
-              <input className="modern-input" name="city" value={formData.city} readOnly placeholder="Auto-filled" />
+              <input className="modern-input" name="city" value={formData.city} onChange={handleInput} placeholder="City" />
             </Field>
             <Field label="State" required>
-              <input className="modern-input" name="state" value={formData.state} readOnly placeholder="Auto-filled" />
+              <input className="modern-input" name="state" value={formData.state} onChange={handleInput} placeholder="State" />
             </Field>
             <Field label={residenceType === 'villa' ? "House No." : "Flat No."} required>
               <input className="modern-input" name="houseNumber" value={formData.houseNumber} onChange={handleInput} placeholder="#" />
@@ -602,10 +618,19 @@ export default function AddressComposer({ initialData, onSaveSuccess }) {
 
           <div className="form-grid" style={{ marginTop: 20, borderTop: '1px solid #eee', paddingTop: 10 }}>
             <Field label="Gate Image (For Delivery)">
-              <label className="upload-box">
-                {formData.gateImage ? 'Image Selected' : 'Tap to upload Gate Image'}
-                <input type="file" name="gateImage" onChange={handleFileChange} accept="image/*" style={{ display: 'none' }} />
-              </label>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <label className="upload-box" style={{ flex: 1 }}>
+                  {formData.gateImage ? (formData.gateImage.includes('streetview') ? 'Street View Captured' : 'Image Uploaded') : 'Upload Photo'}
+                  <input type="file" name="gateImage" onChange={handleFileChange} accept="image/*" style={{ display: 'none' }} />
+                </label>
+                <button
+                  className="upload-box"
+                  style={{ flex: 1, background: '#f0f8ff', border: '1px dashed #2196f3', color: '#2196f3' }}
+                  onClick={() => setFormData(prev => ({ ...prev, gateImage: 'https://maps.googleapis.com/maps/api/streetview?size=400x400&location=12.935,77.614' }))}
+                >
+                  Capture Street View
+                </button>
+              </div>
             </Field>
             <Field label="Audio Instructions">
               <label className="upload-box">

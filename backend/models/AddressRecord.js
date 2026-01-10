@@ -57,7 +57,21 @@ const AddressRecordSchema = new mongoose.Schema(
         polylineOptimized: { type: [PolylinePointSchema], default: [] },
 
         smartAddressCode: { type: String, unique: true, index: true },
-        householdProfileId: { type: mongoose.Schema.Types.ObjectId, ref: 'HouseholdProfile' }
+        householdProfileId: { type: mongoose.Schema.Types.ObjectId, ref: 'HouseholdProfile' },
+
+        quality_score: {
+            score: { type: Number, default: 0 },
+            grade: { type: String, default: 'POOR' },
+            benchmark: { type: Number, default: 60 },
+            breakdown: {
+                structure: Number,
+                spatial: Number,
+                navigation: Number,
+                visual: Number,
+                verification: Number
+            },
+            calculated_at: Date
+        }
     },
     { timestamps: true }
 );

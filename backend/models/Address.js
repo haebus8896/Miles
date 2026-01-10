@@ -43,7 +43,29 @@ const AddressSchema = new mongoose.Schema(
     owner_phone_masked: { type: String, default: '' },
     owner_phone_encrypted: { type: String, default: '' },
     owner_name_masked: { type: String, default: '' },
-    owner_name_encrypted: { type: String, default: '' }
+    owner_phone_encrypted: { type: String, default: '' },
+    owner_name_masked: { type: String, default: '' },
+    owner_name_encrypted: { type: String, default: '' },
+
+    // AQS & Extended Fields
+    gate_image: {
+      url: String,
+      source: { type: String, enum: ['upload', 'streetview'] },
+      captured_at: Date
+    },
+    quality_score: {
+      score: { type: Number, default: 0 },
+      grade: { type: String, default: 'POOR' },
+      benchmark: { type: Number, default: 60 },
+      breakdown: {
+        structure: Number,
+        spatial: Number,
+        navigation: Number,
+        visual: Number,
+        verification: Number
+      },
+      calculated_at: Date
+    }
   },
   { timestamps: true }
 );

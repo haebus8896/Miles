@@ -17,6 +17,8 @@
   --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
+
+
 *,
 *::before,
 *::after {
@@ -863,4 +865,123 @@ body,
   font-size: 12px;
   color: #3B82F6;
   font-weight: 600;
+}
+
+@media (max-width: 768px) {
+
+  /* 1. Global Reset for Mobile */
+  .app-shell {
+    padding: 0;
+    gap: 0;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* 2. Main Layout: Stack Vertical */
+  .main-layout {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  /* 3. Map Region: Top Half (Fixed Height) */
+  .map-region {
+    flex: none;
+    height: 45vh;
+    /* Map takes top 45% */
+    order: 1;
+    /* Visual Top */
+    border-radius: 0 0 20px 20px;
+    /* Round bottom corners only */
+    z-index: 5;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  }
+
+  .map-region .gm-style {
+    border-radius: 0 0 20px 20px;
+  }
+
+  /* 4. Sidebar: Bottom Half (Scrollable Sheet) */
+  .sidebar {
+    flex: 1;
+    order: 2;
+    /* Visual Bottom */
+    padding: 20px;
+    background: #fff;
+    border-radius: 20px 20px 0 0;
+    /* Sheet look */
+    margin-top: -20px;
+    /* Slight overlap */
+    z-index: 10;
+    padding-bottom: 80px;
+    /* Space for bottom safe area */
+  }
+
+  /* 5. Header: Compact or Hidden */
+  .header {
+    display: none;
+    /* Hide huge header on mobile to save space */
+  }
+
+  /* Alternative: Compact Header */
+  /*
+  .header {
+    padding: 10px 16px;
+    border-radius: 0;
+  }
+  .header h1 { font-size: 20px; }
+  .header .muted, .header-actions { display: none; }
+  */
+
+  /* 6. Map Overlays: Reposition */
+  .map-overlay {
+    top: auto;
+    bottom: 30px;
+    /* Move controls to bottom of Map area */
+    left: 10px;
+    right: 10px;
+    width: auto;
+    max-width: none;
+    pointer-events: none;
+  }
+
+  .glass-overlay {
+    pointer-events: auto;
+    width: 100%;
+    max-width: none;
+    background: rgba(255, 255, 255, 0.95);
+    /* More solid on mobile */
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  /* Hide huge text on mobile map */
+  .glass-overlay p {
+    display: none;
+  }
+
+  .glass-overlay h4 {
+    margin: 0;
+    font-size: 14px;
+  }
+
+  /* 7. Floating Actions */
+  .floating-actions {
+    top: 10px;
+    right: 10px;
+  }
+
+  /* 8. Touch Targets */
+  .modern-input,
+  .control-btn,
+  .pill {
+    height: 48px;
+    /* Easier to tap */
+  }
+
+  .search-container {
+    margin-bottom: 10px;
+  }
 }

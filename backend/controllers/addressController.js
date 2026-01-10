@@ -31,6 +31,8 @@ const serializeAddress = (doc) => ({
   owner_name_masked: doc.owner_name_masked,
   owner_phone_masked: doc.owner_phone_masked,
   door_photo: doc.door_photo,
+  door_photo: doc.door_photo,
+  quality_score: doc.quality_score, // Expose AQS
   createdAt: doc.createdAt
 });
 
@@ -140,7 +142,23 @@ exports.createAddress = async (req, res) => {
     owner_name_masked: owner_full_name ? maskName(owner_full_name) : '',
     owner_phone_masked: owner_phone ? maskPhone(owner_phone) : '',
     owner_name_encrypted: owner_full_name ? encrypt(owner_full_name) : '',
-    owner_phone_encrypted: owner_phone ? encrypt(owner_phone) : ''
+    owner_phone_encrypted: owner_phone ? encrypt(owner_phone) : '',
+
+    // AQS Calculation
+    quality_score: require('../utils/aqsCalculator').calculateAQS({
+      flat_no,
+      houseNumber: flat_no, // mapping for calculator
+      floor_no,
+      city,
+      postal_code,
+      official_address,
+      road_point: { coordinates: [roadPoint.lng, roadPoint.lat] },
+      polyline_smoothed: route.smoothed,
+      landmark,
+      instructions,
+      door_photo,
+      owner_phone_masked: owner_phone // assumes presence implies verified in this flow
+    })
   });
 
   res.status(201).json({

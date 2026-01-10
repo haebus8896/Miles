@@ -50,6 +50,15 @@ app.use('/api/residence', require('./routes/residenceRoutes'));
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/delivery', require('./routes/deliveryRoutes'));
 
+// GED & Tracking Backport
+const gedController = require('./controllers/gedController');
+const trackingController = require('./controllers/trackingController');
+
+app.post('/api/ged/rules', gedController.createRule);
+app.post('/api/ged/evaluate', gedController.evaluateEntry);
+app.post('/api/tracking/sessions', trackingController.startSession);
+app.post('/api/tracking/ping', trackingController.pingLocation);
+
 // health
 app.get('/', (req, res) => res.send({ ok: true, msg: 'Backend running' }));
 app.get('/api/health', (req, res) => res.send({ status: 'ok', uptime: process.uptime() }));

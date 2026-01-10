@@ -70,6 +70,18 @@ exports.getPincodeDetails = async (req, res) => {
         const apiKey = process.env.PINCODE_API_KEY;
         const apiUrl = process.env.PINCODE_API_URL;
 
+        // Fallback: If no API key is set, use simple mock logic (prevents crash)
+        if (!apiKey || !apiUrl) {
+            console.warn('[Mock] PINCODE_API_KEY missing. Using static fallback.');
+            if (pincode.startsWith('11')) return res.json({ city: 'New Delhi', state: 'Delhi' });
+            if (pincode.startsWith('56')) return res.json({ city: 'Bengaluru', state: 'Karnataka' });
+            if (pincode.startsWith('40')) return res.json({ city: 'Mumbai', state: 'Maharashtra' });
+            if (pincode.startsWith('60')) return res.json({ city: 'Chennai', state: 'Tamil Nadu' });
+            if (pincode.startsWith('70')) return res.json({ city: 'Kolkata', state: 'West Bengal' });
+            // Default: Empty, user must type manually
+            return res.json({ city: '', state: '' });
+        }
+
         // OGD India API format: filters[pincode]=110001
         const response = await axios.get(apiUrl, {
             params: {
@@ -148,6 +160,22 @@ exports.createResidence = async (req, res) => {
         }
 
         // 2. Create AddressRecord
+        const aqs = require('../utils/aqsCalculator').calculateAQS({
+            flat_no: address.houseNumber, // Mapping
+            houseNumber: address.houseNumber,
+            floor_no: apartmentDetails ? apartmentDetails.floorNumber : undefined,
+            city: address.city,
+            postal_code: address.pincode,
+            official_address: `${address.houseNumber} ${address.area}`,
+            apartmentDetails,
+            road_point: roadPointDb ? { coordinates: roadPointDb.coordinates } : null,
+            polyline_smoothed: routeArtifacts.polylineOptimized,
+            landmark: address.landmark,
+            instructions: address.instructionsText,
+            gate_image: { url: address.gateImageUrl }, // Map to expected object
+            owner_phone_masked: user.phone // Assumed verified
+        });
+
         const newAddress = new AddressRecord({
             residenceType: type,
             apartmentDetails: type === 'apartment' ? apartmentDetails : undefined,
@@ -160,7 +188,8 @@ exports.createResidence = async (req, res) => {
             road_point: roadPointDb,
             destination_point: destinationPointDb,
             source: sourceDb,
-            smartAddressCode: buildAddressCode()
+            smartAddressCode: buildAddressCode(),
+            quality_score: aqs
         });
 
         await newAddress.save();
@@ -207,7 +236,8 @@ exports.createResidence = async (req, res) => {
             success: true,
             addressCode: newAddress.smartAddressCode,
             household: newHousehold,
-            addressId: newAddress._id
+            addressId: newAddress._id,
+            quality_score: newAddress.quality_score
         });
 
     } catch (error) {
