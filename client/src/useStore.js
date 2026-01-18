@@ -56,10 +56,18 @@ export const useStore = create((set) => ({
     set((state) => ({
       addressForm: { ...state.addressForm, [field]: value }
     })),
-  resetAddressForm: () => set({ addressForm: defaultAddressForm }),
-
+  resetAddressForm: () => set({ addressForm: defaultAddressForm }), // Search & View
   savedAddress: null,
-  setSavedAddress: (address) => set({ savedAddress: address }),
+  setSavedAddress: (addr) => set({ savedAddress: addr }),
+
+  // "Fake Backend" Database for Demo (Persistent)
+  createdAddressesMap: JSON.parse(localStorage.getItem('fake_backend_db') || '{}'),
+
+  addCreatedAddress: (code, data) => set((state) => {
+    const updatedMap = { ...state.createdAddressesMap, [code]: data };
+    localStorage.setItem('fake_backend_db', JSON.stringify(updatedMap)); // Persist
+    return { createdAddressesMap: updatedMap };
+  }),
 
   profileForm: defaultProfileForm,
   setProfileField: (field, value) =>
@@ -86,5 +94,30 @@ export const useStore = create((set) => ({
   resetRoute: () => set({ polyline: [], selectedRoadPoint: null, nearestRoad: null }),
 
   focusPoint: null,
-  setFocusPoint: (point) => set({ focusPoint: point })
+  setFocusPoint: (point) => set({ focusPoint: point }),
+
+  // UI Control
+  mapType: 'roadmap', // 'roadmap' | 'satellite' | 'hybrid'
+  setMapType: (type) => set({ mapType: type }),
+
+  wizardStep: 0,
+  setWizardStep: (step) => set({ wizardStep: step }),
+
+  // Multi-mode Polyline
+  currentMode: 'walking', // 'walking' | 'bike' | 'car'
+  setCurrentMode: (mode) => set({ currentMode: mode }),
+
+  polylineSegments: [],
+  setPolylineSegments: (segments) => set({ polylineSegments: segments }),
+
+  // Locating Trigger
+  triggerLocate: false,
+  setTriggerLocate: (val) => set({ triggerLocate: val }),
+
+  // Dot-to-Road
+  waypoints: [],
+  setWaypoints: (updater) =>
+    set((state) => ({
+      waypoints: typeof updater === 'function' ? updater(state.waypoints) : updater
+    }))
 }));

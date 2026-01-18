@@ -1,10 +1,10 @@
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { GoogleMap, Marker, Circle, Polyline } from '@react-google-maps/api';
+import { GoogleMap, Marker, Polyline, OverlayView } from '@react-google-maps/api';
 import { useStore } from './useStore';
-import DrawingLayer from './DrawingLayer';
 import RoadDetection from './RoadDetection';
 import { nearbyAddresses, fetchNearbyRoads } from './api';
-import { chaikinSmooth, pathDistanceMeters, formatDistance } from './PolylineUtils';
+import { pathDistanceMeters, snapPointToPolyline, computeHeading } from './PolylineUtils';
 
 const mapContainerStyle = { width: '100%', height: '100%' };
 const defaultCenter = { lat: 28.6139, lng: 77.209 };
@@ -17,479 +17,374 @@ const mapOptions = {
 };
 
 export default function MapScreen({ isLoaded, loadError }) {
-  // Removed internal useLoadScript
-  /*
-  const { isLoaded, loadError } = useLoadScript({
-    googleMapsApiKey: process.env.REACT_APP_GOOGLE_MAPS_API_KEY,
-    libraries
-  });
-  */
-
   const mapRef = useRef(null);
-  const [mapType, setMapType] = useState('hybrid');
-  const [locating, setLocating] = useState(false);
-  const [status, setStatus] = useState('Tap "Find my location" to begin.');
 
-  // ==== stable, individual selectors (prevents unstable object creation)
+  // Global Store
+  const mapType = useStore((s) => s.mapType);
+  const setMapType = useStore((s) => s.setMapType);
+  const drawing = useStore((s) => s.drawing);
+  const waypoints = useStore((s) => s.waypoints);
+  const setWaypoints = useStore((s) => s.setWaypoints);
+  const savedAddress = useStore((s) => s.savedAddress);
+
+  // Locating Trigger
+  const triggerLocate = useStore((s) => s.triggerLocate);
+  const setTriggerLocate = useStore((s) => s.setTriggerLocate);
+
+  // Other Store Selectors
   const userLocation = useStore((s) => s.userLocation);
   const setUserLocation = useStore((s) => s.setUserLocation);
-
-  const nearestRoadPoint = useStore((s) => s.nearestRoad);
-  const setNearestRoad = useStore((s) => s.setNearestRoad);
-
-  const selectedRoadPoint = useStore((s) => s.selectedRoadPoint);
-  const setSelectedRoadPoint = useStore((s) => s.setSelectedRoadPoint);
-
   const polyline = useStore((s) => s.polyline);
-  const setPolyline = useStore((s) => s.setPolyline);
-
-  const drawing = useStore((s) => s.drawing);
-  const setDrawing = useStore((s) => s.setDrawing);
-
-  const nearbyList = useStore((s) => s.nearbyAddresses);
-  const setNearbyAddresses = useStore((s) => s.setNearbyAddresses);
-
-  const setDuplicates = useStore((s) => s.setDuplicates);
-  const savedAddress = useStore((s) => s.savedAddress);
+  const polylineSegments = useStore((s) => s.polylineSegments);
   const focusPoint = useStore((s) => s.focusPoint);
+  const currentMode = useStore((s) => s.currentMode); // Subscribe to mode
 
-  // New state for road visibility
+  // Local State
+  const [locating, setLocating] = useState(false);
   const [referencePoint, setReferencePoint] = useState(null);
   const [nearbyRoads, setNearbyRoads] = useState([]);
-  const [selectedRoadPath, setSelectedRoadPath] = useState(null);
 
-
-  // derived
-  const routeDistance = useMemo(() => pathDistanceMeters(polyline), [polyline]);
-  const routeReady = Boolean(selectedRoadPoint && polyline && polyline.length >= 2);
-
-  // safe pan helper (no state changes)
-  const panTo = useCallback((point, zoom = 19) => {
-    if (!point || !mapRef.current) return;
-    if (typeof point.lat !== 'number' || typeof point.lng !== 'number') {
-      console.warn('Invalid point passed to panTo:', point);
-      return;
-    }
-    try {
-      mapRef.current.panTo(point);
-      mapRef.current.setZoom(zoom);
-    } catch (e) {
-      console.error('Map panTo error:', e);
-    }
-  }, []);
-
-  const onMapLoad = useCallback(
-    (map) => {
-      mapRef.current = map;
-      if (mapType) map.setMapTypeId(mapType);
-    },
-    [mapType]
-  );
+  const onMapLoad = useCallback((map) => {
+    mapRef.current = map;
+    if (mapType) map.setMapTypeId(mapType);
+  }, [mapType]);
 
   useEffect(() => {
     if (mapRef.current) mapRef.current.setMapTypeId(mapType);
   }, [mapType]);
 
+  // Auto-Zoom on Drawing
+  useEffect(() => {
+    if (drawing && mapRef.current) {
+      mapRef.current.setZoom(21);
+      mapRef.current.setMapTypeId('hybrid');
+    }
+  }, [drawing]);
+
+  const panTo = useCallback((point, zoom = 19) => {
+    if (!point || !mapRef.current) return;
+    try {
+      mapRef.current.panTo(point);
+      mapRef.current.setZoom(zoom);
+    } catch (e) {
+      console.error('Pan error:', e);
+    }
+  }, []);
+
+  // Hydrate context (nearby roads/addresses)
+  const hydrateContext = useCallback(async (point) => {
+    if (!point) return;
+    setReferencePoint(point);
+    try {
+      const roads = await fetchNearbyRoads(point.lat, point.lng);
+      setNearbyRoads(roads || []);
+    } catch (err) {
+      console.error('Failed to fetch roads', err);
+    }
+  }, [setReferencePoint]);
+
+  // Location Handler
+  const handleFindMyLocation = useCallback(() => {
+    if (!navigator.geolocation) return;
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const pt = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setUserLocation(pt);
+        panTo(pt);
+        hydrateContext(pt); // <--- Auto-fetch roads around user
+        setLocating(false);
+      },
+      (err) => {
+        console.error(err);
+        setLocating(false);
+      },
+      { enableHighAccuracy: true }
+    );
+  }, [panTo, setUserLocation, hydrateContext]);
+
+  // Trigger Listener
+  useEffect(() => {
+    if (triggerLocate) {
+      handleFindMyLocation();
+      setTriggerLocate(false);
+    }
+  }, [triggerLocate, handleFindMyLocation, setTriggerLocate]);
+
+  // Focus Point Listener
   useEffect(() => {
     if (focusPoint) panTo(focusPoint, 20);
   }, [focusPoint, panTo]);
 
-  // Load saved address route on map when address is loaded
-  useEffect(() => {
-    if (savedAddress && savedAddress.polyline_smoothed && savedAddress.polyline_smoothed.length > 0) {
-      setPolyline(savedAddress.polyline_smoothed);
-
-      // Fit bounds to show the entire route
-      if (mapRef.current && window.google) {
-        const bounds = new window.google.maps.LatLngBounds();
-        savedAddress.polyline_smoothed.forEach(point => bounds.extend(point));
-        mapRef.current.fitBounds(bounds);
-      }
-
-      if (savedAddress.road_point) {
-        setSelectedRoadPoint(savedAddress.road_point);
-        setNearestRoad(savedAddress.road_point);
-      }
-    }
-  }, [savedAddress, setPolyline, setSelectedRoadPoint, setNearestRoad]);
-
-  // hydrate context: do not call setState synchronously outside handlers
-  const hydrateContext = useCallback(
-    async (point) => {
-      if (!point) return;
-      setReferencePoint(point);
-      setNearbyRoads([]); // Clear previous roads immediately
-      setSelectedRoadPath(null); // Clear selection
-      setStatus('Scanning nearby roads...');
-
-      try {
-        const roads = await fetchNearbyRoads(point.lat, point.lng, 100);
-        // Backend now handles the logic and filtering properly
-        setNearbyRoads(roads);
-        setStatus('Roads visible. Tap a road segment to begin.');
-      } catch (err) {
-        console.error(err);
-        setStatus('Unable to fetch nearby roads.');
-      }
-
-      try {
-        const results = await nearbyAddresses(point.lat, point.lng, 100);
-        setNearbyAddresses(results || []);
-      } catch (err) {
-        console.error(err);
-      }
-    },
-    [setNearbyAddresses, setReferencePoint, setNearbyRoads]
-  );
-
-  // location handler (user action)
-  const handleFindMyLocation = useCallback(() => {
-    if (!navigator.geolocation) {
-      setStatus('Geolocation is not supported in this browser.');
-      return;
-    }
-    setLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const { latitude: lat, longitude: lng } = pos.coords;
-        const userPoint = { lat, lng };
-        setUserLocation(userPoint);
-        panTo(userPoint);
-        await hydrateContext(userPoint);
-        setLocating(false);
-      },
-      (err) => {
-        setStatus(`Location error: ${err.message}`);
-        setLocating(false);
-      },
-      { enableHighAccuracy: true, timeout: 12000 }
-    );
-  }, [hydrateContext, panTo, setUserLocation]);
-
-  // drawing handlers
+  // Map Click - Dot Placement Logic
   const handleMapClick = (event) => {
     const point = { lat: event.latLng.lat(), lng: event.latLng.lng() };
 
     if (drawing) {
-      // Ensure we have a road start point
-      if (!selectedRoadPoint) {
-        setStatus('Please select a road segment first.');
-        return;
+      // 1. ALWAYS Highlight roads around the click immediately
+      hydrateContext(point);
+
+      // 2. Smart Zoom: Ensure user is at MAX zoom before allowing dot placement
+      const currentZoom = mapRef.current ? mapRef.current.getZoom() : 0;
+
+      if (currentZoom < 20) {
+        panTo(point, 22); // Zoom to MAX (22)
+        return; // Stop here. User must click again to place dot.
       }
 
-      // If polyline is empty, start with the road point, then add the clicked point
-      setPolyline((prev) => {
-        if (!prev || prev.length === 0) {
-          return [selectedRoadPoint, point];
+      // 3. Place Dot
+      let finalPoint = point;
+
+      // START DOT SNAP: If it's the first dot, try to snap to a nearby blue road
+      if (waypoints.length === 0 && nearbyRoads.length > 0) {
+        let bestSnap = null;
+        let bestDistSq = Infinity;
+
+        nearbyRoads.forEach(road => {
+          try {
+            const snap = snapPointToPolyline(point, road);
+            if (snap) {
+              const dx = snap.lat - point.lat;
+              const dy = snap.lng - point.lng;
+              const dSq = dx * dx + dy * dy;
+              if (dSq < bestDistSq) {
+                bestDistSq = dSq;
+                bestSnap = snap;
+              }
+            }
+          } catch (err) {
+            console.warn("Snap calc failed for a road seg", err);
+          }
+        });
+
+        // If we found a snap point within reasonable distance (approx ~30-40m in latlng degrees)
+        if (bestSnap && bestDistSq < 0.000001) {
+          finalPoint = bestSnap;
+          console.log('Snapped Start Point to Road');
         }
-        return [...prev, point];
-      });
+      }
+
+      setWaypoints(prev => [...prev, finalPoint]);
     } else {
-      // Set reference point
+      // Normal mode (selecting saved addresses etc)
       setReferencePoint(point);
       hydrateContext(point);
-      panTo(point);
     }
   };
 
-  const handleSelectRoad = useCallback(
-    (point, roadSegment = null) => {
-      // Check if point is within 100m of referencePoint is now less critical as backend filters,
-      // but keeping it for sanity if needed. 
-      // Actually, user explicitly said "Remove clipPath logic".
+  if (loadError) return <div>Map Error</div>;
+  if (!isLoaded) return <div>Loading Map...</div>;
 
-      setSelectedRoadPoint(point);
-      if (roadSegment) {
-        setSelectedRoadPath(roadSegment);
-      }
-
-      setPolyline((prev) => {
-        if (!prev || prev.length === 0) return [point];
-        const rest = prev.slice(1);
-        return [point, ...rest];
-      });
-      setStatus('Road anchor locked. Tap "Draw route" to continue.');
-      panTo(point, 20);
-    },
-    [setSelectedRoadPoint, setPolyline, panTo]
-  );
-
-  const handleToggleDrawing = useCallback(() => {
-    if (!selectedRoadPoint && !nearestRoadPoint) {
-      setStatus('Select the highlighted road anchor before drawing.');
-      return;
-    }
-    if (!selectedRoadPoint && nearestRoadPoint) handleSelectRoad(nearestRoadPoint);
-    setDrawing((prev) => {
-      const next = !prev;
-      setStatus(next ? 'Drawing enabled - tap inside your lane.' : 'Drawing paused.');
-      return next;
-    });
-  }, [selectedRoadPoint, nearestRoadPoint, handleSelectRoad, setDrawing]);
-
-  const handleSmoothRoute = useCallback(() => {
-    if (!polyline || polyline.length < 3) {
-      setStatus('Add at least three points before smoothing the route.');
-      return;
-    }
-    setPolyline((prev) => chaikinSmooth(prev, 2));
-    setStatus('Route smoothened for a cleaner delivery overlay.');
-  }, [polyline, setPolyline]);
-
-  const handleUndo = useCallback(() => {
-    if (!polyline || polyline.length === 0) return;
-    setPolyline((prev) => prev.slice(0, -1));
-  }, [polyline, setPolyline]);
-
-  const handleClear = useCallback(() => {
-    setPolyline([]);
-    setSelectedRoadPoint(null);
-    setSelectedRoadPath(null);
-    setNearestRoad(null);
-    setDrawing(false);
-    setReferencePoint(null);
-    setNearbyRoads([]);
-    if (typeof setDuplicates === 'function') setDuplicates([]);
-    setStatus('Tap "Find my location" or tap the map to start.');
-  }, [setPolyline, setSelectedRoadPoint, setNearestRoad, setDrawing, setDuplicates]);
-
-  const handleMapTypeToggle = useCallback(() => {
-    setMapType((prev) => (prev === 'hybrid' ? 'roadmap' : 'hybrid'));
-  }, []);
-
-  const handleFocusAddress = useCallback((addr) => {
-    if (!addr || !addr.destination_point) return;
-    panTo(addr.destination_point, 20);
-
-    // Show the route if available
-    if (addr.polyline_smoothed && addr.polyline_smoothed.length > 0) {
-      setPolyline(addr.polyline_smoothed);
-
-      // Also set the road point if available
-      if (addr.road_point) {
-        setSelectedRoadPoint(addr.road_point);
-        setNearestRoad(addr.road_point);
-      }
-
-      // Fit bounds to show the whole route
-      if (mapRef.current && window.google) {
-        const bounds = new window.google.maps.LatLngBounds();
-        addr.polyline_smoothed.forEach(point => bounds.extend(point));
-        mapRef.current.fitBounds(bounds);
-      }
-    }
-  }, [panTo, setPolyline, setSelectedRoadPoint, setNearestRoad]);
-
-  if (loadError) {
-    return <div className="map-card">Unable to load Google Maps. Check your API key.</div>;
-  }
-
-  if (!isLoaded) {
-    return <div className="map-card">Loading satellite tiles...</div>;
-  }
-
-  const googleMaps = typeof window !== 'undefined' ? window.google?.maps : undefined;
+  const getSymbolPath = () => {
+    return window.google && window.google.maps && window.google.maps.SymbolPath ? window.google.maps.SymbolPath.CIRCLE : undefined;
+  };
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+      {/* View Toggle Overlay (Map Style) */}
+      {savedAddress && (
+        <div style={{ position: 'absolute', top: 20, right: 60, zIndex: 50, background: 'rgba(255,255,255,0.9)', padding: 4, borderRadius: 24, display: 'flex', boxShadow: '0 4px 12px rgba(0,0,0,0.2)' }}>
+          <div
+            onClick={() => setMapType('hybrid')}
+            style={{
+              padding: '8px 16px', borderRadius: 20, fontSize: 13, fontWeight: 700, cursor: 'pointer',
+              background: mapType === 'hybrid' ? '#1e293b' : 'transparent',
+              color: mapType === 'hybrid' ? 'white' : '#64748b',
+              transition: 'all 0.2s ease'
+            }}
+          >
+            Satellite 🛰️
+          </div>
+          <div
+            onClick={() => setMapType('roadmap')}
+            style={{
+              padding: '8px 16px', borderRadius: 20, fontSize: 13, fontWeight: 700, cursor: 'pointer',
+              background: (!mapType || mapType === 'roadmap') ? '#1e293b' : 'transparent',
+              color: (!mapType || mapType === 'roadmap') ? 'white' : '#64748b',
+              transition: 'all 0.2s ease'
+            }}
+          >
+            Default 🗺
+          </div>
+        </div>
+      )}
+
       <GoogleMap
         onLoad={onMapLoad}
         onClick={handleMapClick}
         mapContainerStyle={mapContainerStyle}
         center={userLocation || defaultCenter}
-        zoom={userLocation ? 18 : 13}
+        zoom={18}
         options={mapOptions}
-        mapTypeId={mapType}
       >
-        {userLocation && (
-          <>
-            <Marker
-              position={userLocation}
-              label={{ text: 'You', color: '#fff', fontWeight: '700' }}
-              icon={{
-                path: googleMaps?.SymbolPath.CIRCLE,
-                scale: 6,
-                fillColor: '#4C6FFF', // Primary Accent
-                fillOpacity: 1,
-                strokeColor: '#fff',
-                strokeWeight: 2
+        {/* Street View Removed - Satellite Toggle handles MapType */}
+        {/* Render Detected Roads (Radius) */}
+        <RoadDetection
+          roads={nearbyRoads}
+          onSelectRoad={(anchor) => {
+            // If user clicks explicitly on the blue line, use that point
+            if (drawing) {
+              setWaypoints(prev => [...prev, anchor]);
+            }
+          }}
+        />
+
+        {/* Generated Polyline (Multi-mode) */}
+        {/* Generated Polyline (Multi-mode) */}
+        {polylineSegments.length > 0 ? (
+          polylineSegments.map((seg, i) => {
+            let color = '#4285F4'; // Default (Car)
+            if (seg.mode === 'walking') color = '#00E5FF'; // Cyan
+            if (seg.mode === 'bike') color = '#FFFF00'; // Yellow
+            if (seg.mode === 'car') color = '#4285F4'; // Blue
+
+            return (
+              <Polyline
+                key={i}
+                path={seg.points}
+                options={{
+                  strokeColor: color,
+                  strokeOpacity: 1.0,
+                  strokeWeight: 4,
+                  icons: seg.mode === 'walking' ? [{
+                    icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 2 }, // Smaller dashes
+                    offset: '0', repeat: '16px'
+                  }] : undefined
+                }}
+              />
+            );
+          })
+        ) : (
+          // Fallback to simple polyline if segments missing
+          polyline.length > 0 && (
+            <Polyline
+              path={polyline}
+              options={{
+                strokeColor: '#4285F4',
+                strokeOpacity: 1.0,
+                strokeWeight: 4,
               }}
             />
-
-          </>
+          )
         )}
 
-        {referencePoint && (
-          <Circle
-            center={referencePoint}
-            radius={100}
-            options={{
-              fillColor: '#4C6FFF', // Primary Accent
-              fillOpacity: 0.1,
-              strokeColor: '#4C6FFF', // Primary Accent
-              strokeOpacity: 0.3,
+        {/* Waypoint Dots (Trail) */}
+        {waypoints.slice(0, waypoints.length - 1).map((pt, i) => (
+          <Marker
+            key={i}
+            position={pt}
+            icon={{
+              path: getSymbolPath(),
+              scale: 4,
+              fillColor: '#FF5722',
+              fillOpacity: 0.8,
               strokeWeight: 1,
-              zIndex: 1,
-              clickable: false
+              strokeColor: 'white',
             }}
-          />
-        )}
-
-        {/* Render Invisible Hit Targets */}
-        <RoadDetection roads={nearbyRoads} onSelectRoad={handleSelectRoad} />
-
-        {/* Render Selected Road Visibly */}
-        {selectedRoadPath && (
-          <Polyline
-            path={selectedRoadPath}
-            options={{
-              strokeColor: '#1976D2',
-              strokeWeight: 6,
-              strokeOpacity: 1,
-              zIndex: 10
-            }}
-          />
-        )}
-
-        {selectedRoadPoint && (
-          <Marker
-            position={selectedRoadPoint}
-            label={{ text: 'Start', color: '#fff', fontWeight: '700' }}
-            icon={{
-              path: googleMaps?.SymbolPath.BACKWARD_OPEN_ARROW,
-              scale: 5,
-              fillColor: '#2EC4B6', // Secondary Accent (Mint)
-              fillOpacity: 1,
-              strokeColor: '#0D1B2A', // Contrast Base
-              strokeWeight: 1.5
-            }}
-            draggable
-            onDragEnd={(e) => handleSelectRoad({ lat: e.latLng.lat(), lng: e.latLng.lng() })}
-          />
-        )}
-
-        <DrawingLayer nearbyRoads={nearbyRoads} onSelectRoad={handleSelectRoad} />
-
-        {nearbyList && nearbyList.map((addr, index) => (
-          <Marker
-            key={addr.id || addr._id || index}
-            position={addr.destination_point}
-            title={addr.official_address || addr.code}
-            label={{
-              text: addr.code,
-              color: '#000',
-              fontSize: '11px',
-              fontWeight: '600',
-              className: 'map-marker-label'
-            }}
-            icon={{
-              path: googleMaps?.SymbolPath.CIRCLE,
-              scale: 6,
-              fillColor: '#FFD700', // Gold/Yellow for saved addresses
-              fillOpacity: 1,
-              strokeColor: '#ffffff',
-              strokeWeight: 2
-            }}
-            onClick={() => handleFocusAddress(addr)}
           />
         ))}
+
+        {/* Animated Head Marker (OverlayView) */}
+        {waypoints.length > 0 && (
+          (() => {
+            const pt = waypoints[waypoints.length - 1];
+
+            // Calculate Heading
+            let heading = 0;
+            if (waypoints.length > 1) {
+              heading = computeHeading(waypoints[waypoints.length - 2], pt);
+            } else if (userLocation) {
+              heading = 0;
+            }
+
+            // Icons Config
+            const isCar = currentMode === 'car';
+            const rotation = isCar ? heading + 90 : 0;
+            const color = isCar ? '#4285F4' : currentMode === 'bike' ? '#FFFF00' : '#00E5FF';
+
+            // Icons
+            const carPath = "M12 2a3 3 0 0 0-3 3v1h-1a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h1v2a1 1 0 0 0 1 1h1a1 1 0 0 0 1-1v-2h4v2a1 1 0 0 0 1 1h1a1 1 0 0 0 1-1v-2h1a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-1V5a3 3 0 0 0-3-3zM9 8h6v8H9z";
+            const bikePath = "M15.5 5.5c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zM5 12c-2.8 0-5 2.2-5 5s2.2 5 5 5 5-2.2 5-5-2.2-5-5-5zm0 8.5c-1.9 0-3.5-1.6-3.5-3.5s1.6-3.5 3.5-3.5 3.5 1.6 3.5 3.5-1.6 3.5-3.5 3.5zm5.8-10l2.4-2.4.8.8c1.3 1.3 3 2.1 5.1 2.1V9c-1.5 0-2.7-.6-3.6-1.5l-1.9-1.9c-.5-.4-1.2-.4-1.6 0l-4.2 4.2 3.2 3.2c.8.8 1.2 1.8 1.2 2.9h1.5c0-1.4-.6-2.8-1.7-3.8l-1.2-1.2z";
+            const walkPath = "M13.5 5.5c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zM9.8 8.9L7 23h2.1l1.8-8 2.1 2v6h2v-7.5l-2.1-2 .6-3C14.8 12 16.8 13 19 13v-2c-1.9 0-3.5-1-4.3-2.4l-1-4.3c-.3-1.2-1.4-2.1-2.7-2.1H6.8c-1.7 0-3 1.3-3 3v4h2v-4h3l.7 3 2.3 2.3z";
+
+            const path = isCar ? carPath : currentMode === 'bike' ? bikePath : walkPath;
+
+            const emoji = currentMode === 'walking' ? '🚶' : currentMode === 'bike' ? '🚴' : '🚗';
+
+            return (
+              <OverlayView
+                position={pt}
+                mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
+                getPixelPositionOffset={(x, y) => ({ x: -15, y: -15 })}
+              >
+                <div className={`marker-icon ${currentMode}`} style={{
+                  fontSize: '24px',
+                  transform: `rotate(${rotation}deg)`,
+                  transition: 'transform 0.3s',
+                  filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.3))',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: '30px',
+                  height: '30px',
+                  lineHeight: 1,
+                  marginTop: '-2px'
+                }}>
+                  {emoji}
+                </div>
+              </OverlayView>
+            );
+          })()
+        )}
+
+        {/* User Location */}
+        {userLocation && (
+          <Marker
+            position={userLocation}
+            icon={{
+              path: window.google?.maps?.SymbolPath?.CIRCLE,
+              scale: 8,
+              fillColor: '#4285F4',
+              fillOpacity: 1,
+              strokeWeight: 2,
+              strokeColor: 'white',
+            }}
+          />
+        )}
+
+        {/* Saved Address Marker (View Mode) */}
+        {savedAddress && (savedAddress.destination_point || savedAddress.location) && (
+          <Marker
+            position={{
+              lat: savedAddress.destination_point?.coordinates ? savedAddress.destination_point.coordinates[1] : savedAddress.location.lat,
+              lng: savedAddress.destination_point?.coordinates ? savedAddress.destination_point.coordinates[0] : savedAddress.location.lng
+            }}
+            animation={window.google?.maps?.Animation?.DROP}
+            label={{
+              text: "HOME",
+              color: "white",
+              fontWeight: "bold",
+              fontSize: "12px",
+              className: "home-label"
+            }}
+            icon={{
+              path: "M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z", // Simple Home SVG path
+              fillColor: '#E91E63', // Pink/Red distinct from generic pins
+              fillOpacity: 1,
+              strokeWeight: 1,
+              strokeColor: '#ffffff',
+              scale: 1.5,
+              anchor: new window.google.maps.Point(12, 12)
+            }}
+          />
+        )}
       </GoogleMap>
 
-      <div className="map-overlay">
-        <div className="glass-overlay">
-          <h4>Doorstep route</h4>
-          <p>
-            1) Locate yourself, 2) tap the road, 3) draw the lane exactly the way riders should follow it.
-          </p>
-          <div className="map-tools">
-            <button className={`pill ${drawing ? 'active' : ''}`} onClick={handleToggleDrawing} title="Draw Route">
-              {/* Pen Icon - Clearer for "Draw" */}
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
-                <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
-              </svg>
-            </button>
-            <button className="pill" onClick={handleSmoothRoute} disabled={!polyline || polyline.length < 3} title="Smooth Route">
-              {/* Curve Icon - Clearer for "Smooth" */}
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 12c3-4 6-7 9-7s9 5 9 12"></path>
-              </svg>
-            </button>
-            <button className="pill" onClick={handleUndo} disabled={!polyline || polyline.length === 0} title="Undo">
-              {/* Back Arrow - Standard Undo */}
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 14L4 9l5-5"></path>
-                <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"></path>
-              </svg>
-            </button>
-            <button className="pill" onClick={handleClear} disabled={!polyline.length && !selectedRoadPoint} title="Reset">
-              {/* Refresh/X Icon - Clearer for "Reset" than Trash */}
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M23 4v6h-6"></path>
-                <path d="M1 20v-6h6"></path>
-                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-              </svg>
-            </button>
-          </div>
-          <div className="map-status">
-            <span className="ok">{formatDistance(routeDistance)}</span>
-            <span className="warn">{polyline ? polyline.length : 0} pts</span>
-            <span className="warn">{routeReady ? 'Route ready' : 'Pending'}</span>
-          </div>
-          <p style={{ marginTop: 10 }}>{status}</p>
-          {savedAddress && (
-            <div className="map-status">
-              <span className="ok">Saved as {savedAddress.code}</span>
-            </div>
-          )}
-        </div>
+      {/* Overlay Status */}
+      <div className="map-overlay" style={{ pointerEvents: 'none' }}>
+        {/* Add any floating status text here if needed */}
       </div>
-
-      <div className="floating-actions">
-        <button className="primary" onClick={handleFindMyLocation} disabled={locating} title="Find My Location">
-          {/* Target Icon */}
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="22" y1="12" x2="18" y2="12"></line>
-            <line x1="6" y1="12" x2="2" y2="12"></line>
-            <line x1="12" y1="6" x2="12" y2="2"></line>
-            <line x1="12" y1="22" x2="12" y2="18"></line>
-          </svg>
-        </button>
-        <button onClick={handleMapTypeToggle} title="Switch Map View">
-          {/* Layers Icon */}
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-            <polyline points="2 17 12 22 22 17"></polyline>
-            <polyline points="2 12 12 17 22 12"></polyline>
-          </svg>
-        </button>
-      </div>
-
-      {nearbyList && nearbyList.length > 0 && (
-        <div className="nearby-strip">
-          {nearbyList.map((addr, index) => (
-            <div key={`card-${addr.id || addr._id || addr.code}-${index}`} className="nearby-chip" onClick={() => handleFocusAddress(addr)}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <strong>{addr.code}</strong>
-                <span style={{ fontSize: '10px', background: '#EFF6FF', color: '#3B82F6', padding: '2px 6px', borderRadius: '4px' }}>
-                  {addr.type === 'apartment' ? 'Apt' : 'House'}
-                </span>
-              </div>
-              <div className="muted">
-                {addr.official_address || 'No address details available'}
-              </div>
-              <div className="meta">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                  <circle cx="12" cy="12" r="3"></circle>
-                </svg>
-                View Route
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

@@ -61,6 +61,20 @@ export function formatDistance(meters = 0) {
   return `${meters.toFixed(1)} m`;
 }
 
+export function computeHeading(p1, p2) {
+  if (!p1 || !p2) return 0;
+
+  const lat1 = toRad(p1.lat);
+  const lat2 = toRad(p2.lat);
+  const dLng = toRad(p2.lng - p1.lng);
+
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) -
+    Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
 // --- Precise Snapping Utils ---
 
 function latLngToMeters(lat, lng, refLat) {

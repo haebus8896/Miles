@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { getResidenceByCode } from '../api';
 import usePlacesAutocomplete, { getGeocode, getLatLng } from 'use-places-autocomplete';
+import { useStore } from '../useStore';
 
 export default function SearchBar({ onResult, isLoaded }) {
   const [query, setQuery] = useState('');
@@ -61,12 +62,37 @@ export default function SearchBar({ onResult, isLoaded }) {
       setLoading(true);
       setError('');
       try {
-        const data = await getResidenceByCode(query.trim());
+        let data;
+        // 1. Check if we have this locally in our "Fake Backend"
+        const localDB = useStore.getState().createdAddressesMap || {};
+        const localMatch = localDB[query.trim().toUpperCase()];
+
+        if (localMatch) {
+          data = localMatch;
+        } else if (query.trim().toUpperCase() === 'M-8X92-NEW') {
+          // ... Keep static fallback for safety if needed ...
+          data = { /* ... static mock from before ... */
+            address: {
+              smartAddressCode: 'M-8X92-NEW',
+              residenceType: 'house',
+              userName: 'Demo User',
+              addressLabel: 'Home',
+              addressDetails: { houseNumber: '42-B', area: 'Green Park', city: 'New Delhi', state: 'DL' },
+              polylineOptimized: [{ lat: 28.6129, lng: 77.2295 }, { lat: 28.6140, lng: 77.2300 }],
+              transportMode: 'bike' // Mock Mode for testing Yellow Line
+            },
+            household: { maskedDisplayData: { primary: { maskedName: 'Demo', maskedPhone: '***' }, members: [] } }
+          };
+        } else {
+          data = await getResidenceByCode(query.trim());
+        }
+
         onResult({ type: 'residence', data });
         setQuery('');
         setValue('');
       } catch (err) {
-        setError('Smart Address not found');
+        console.error(err);
+        setError('Smart Address not found (Mock: Try M-8X92-NEW)');
       } finally {
         setLoading(false);
       }

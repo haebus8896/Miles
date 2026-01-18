@@ -1,787 +1,630 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../useStore';
-import { checkApartmentName, createResidence, requestOtp, verifyOtp, updateResidence, addResidenceProfile, getPincodeDetails } from '../api';
+import { GoogleMap, StreetViewPanorama, Autocomplete, Marker, Polyline } from '@react-google-maps/api';
+import { createResidence, requestOtp, verifyOtp } from '../api';
+import { chaikinSmooth, pathDistanceMeters } from '../PolylineUtils';
 
-// --- Sub-components ---
+const defaultCenter = { lat: 28.6139, lng: 77.209 };
 
-const StepCard = ({ title, active, completed, onClick, children, stepNumber }) => (
-  <div className={`step-card ${active ? 'active' : ''} ${completed ? 'completed' : ''}`}>
-    <div className="step-header" onClick={onClick}>
-      <div className="step-indicator">
-        {completed ? (
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="20 6 9 17 4 12"></polyline>
-          </svg>
-        ) : stepNumber}
-      </div>
-      <div className="step-title">{title}</div>
-    </div>
-    {active && <div className="step-content">{children}</div>}
-  </div>
-);
-
-const Field = ({ label, required, error, children }) => (
-  <label className="form-field">
-    <span>{label} {required && <span style={{ color: 'red' }}>*</span>}</span>
+const MinimalField = ({ label, children }) => (
+  <label style={{ display: 'block', marginBottom: 20 }}>
+    <span className="field-label">{label}</span>
     {children}
-    {error && <span className="field-error">{error}</span>}
   </label>
 );
 
-// --- Main Component ---
-
-export default function AddressComposer({ initialData, onSaveSuccess }) {
+export default function AddressComposer({ initialData }) {
   // Global Store
   const selectedRoadPoint = useStore((state) => state.selectedRoadPoint);
   const polyline = useStore((state) => state.polyline);
-  const userLocation = useStore((state) => state.userLocation);
   const setPolyline = useStore((state) => state.setPolyline);
   const setSelectedRoadPoint = useStore((state) => state.setSelectedRoadPoint);
+  const setMapType = useStore((state) => state.setMapType);
+  const setFocusPoint = useStore((state) => state.setFocusPoint);
+  const setWizardStep = useStore((state) => state.setWizardStep);
 
-  // Local State
-  // Steps: 
-  // 1. Type
-  // 2. Apartment Details (Only if Apt)
-  // 3. Address Details
-  // 4. Map & Media
-  // 5. Verification
-  const [activeStep, setActiveStep] = useState(initialData ? 3 : 1); // Skip to details if editing
-  const [residenceType, setResidenceType] = useState(initialData?.residenceType || '');
+  // Multi-mode
+  const currentMode = useStore((state) => state.currentMode);
+  const setCurrentMode = useStore((state) => state.setCurrentMode);
+  const polylineSegments = useStore((state) => state.polylineSegments);
+  const setPolylineSegments = useStore((state) => state.setPolylineSegments);
+  const waypoints = useStore((state) => state.waypoints); // Added subscription
+
+  // Wizard State
+  const [activeSlide, setActiveSlide] = useState(0);
+
+  // Sync to global store for Layout Control (App.js uses this to hide/show Map)
+  useEffect(() => {
+    setWizardStep(activeSlide);
+  }, [activeSlide, setWizardStep]);
+
+  const [locationSource, setLocationSource] = useState('current'); // 'current' or 'manual'
 
   // Form Data
   const [formData, setFormData] = useState({
-    apartmentName: initialData?.apartmentDetails?.name || '',
-    block: initialData?.apartmentDetails?.block || '',
-    floorNumber: initialData?.apartmentDetails?.floorNumber || '',
-    totalFloors: initialData?.apartmentDetails?.totalFloors || '',
-    entranceType: initialData?.apartmentDetails?.entranceType || '',
-
-    houseNumber: initialData?.addressDetails?.houseNumber || '',
-    area: initialData?.addressDetails?.area || '',
-    landmark: initialData?.addressDetails?.landmark || '',
-    pincode: initialData?.addressDetails?.pincode || '',
-    city: initialData?.addressDetails?.city || '',
-    state: initialData?.addressDetails?.state || '',
-    tags: initialData?.addressDetails?.tags?.join(', ') || '',
-    instructions: initialData?.addressDetails?.instructionsText || '',
-    gateImage: initialData?.addressDetails?.gateImageUrl || null,
-    audioInstruction: initialData?.addressDetails?.instructionsAudioUrl || null,
-
-    userName: '', // Not needed for edit
-    userPhone: '', // Not needed for edit
-    otp: ''
+    userName: '',
+    addressContext: 'self', // 'self' or 'other'
+    gateImage: null,
+    otp: '',
+    userPhone: '',
+    // Detailed Address Fields
+    houseNumber: '',
+    floorNumber: '',
+    blockName: '',
+    landmark: '',
+    // Temp storage for extracted details
+    tempDetails: {},
+    tempFormatted: ''
   });
 
-  // If editing, load map data
-  useEffect(() => {
-    if (initialData) {
-      if (initialData.polylineOptimized) setPolyline(initialData.polylineOptimized);
-      if (initialData.road_point) setSelectedRoadPoint(initialData.road_point);
-    }
-  }, [initialData, setPolyline, setSelectedRoadPoint]);
-
   // UI State
-  const [apartmentSuggestions, setApartmentSuggestions] = useState([]);
-  const [otpSent, setOtpSent] = useState(false);
-  const [otpVerified, setOtpVerified] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [successData, setSuccessData] = useState(null);
-  const [otpReference, setOtpReference] = useState(null);
+  const [successCode, setSuccessCode] = useState(null);
 
-  // Add Member State
-  const [addingMember, setAddingMember] = useState(false);
-  const [newMember, setNewMember] = useState({ name: '', phone: '', otp: '', relationship: '' });
-  const [newMemberOtpSent, setNewMemberOtpSent] = useState(false);
-  const [newMemberOtpVerified, setNewMemberOtpVerified] = useState(false);
+  // Route Info State
+  const [startLocationName, setStartLocationName] = useState('Entry Point');
 
-  // Derived State
-  const routeReady = selectedRoadPoint && polyline.length >= 2;
+  useEffect(() => {
+    if (activeSlide === 3 && waypoints.length > 0) {
+      const start = waypoints[0];
+      const geocoder = new window.google.maps.Geocoder();
+      geocoder.geocode({ location: start }, (results, status) => {
+        if (status === 'OK' && results[0]) {
+          const name = results[0].formatted_address.split(',')[0];
+          setStartLocationName(name);
+        }
+      });
+    }
+  }, [activeSlide, waypoints]);
 
-  // --- Handlers ---
+  // Refs
+  const panoramaRef = useRef(null);
+  const autocompleteRef = useRef(null);
 
+  // Handlers
   const handleInput = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleFileChange = (e) => {
-    const { name, files } = e.target;
-    if (files && files[0]) {
-      setFormData(prev => ({ ...prev, [name]: 'fake_url_' + files[0].name }));
-    }
-  };
-
-  const handleApartmentSearch = async (e) => {
-    const val = e.target.value;
-    handleInput(e);
-    if (val.length > 2) {
-      try {
-        const results = await checkApartmentName(val);
-        setApartmentSuggestions(results);
-      } catch (err) {
-        console.error(err);
-      }
-    } else {
-      setApartmentSuggestions([]);
-    }
-  };
-
-  const selectApartment = (apt) => {
-    setFormData(prev => ({
-      ...prev,
-      apartmentName: apt.apartmentDetails.name,
-      area: apt.addressDetails?.area || prev.area,
-      city: apt.addressDetails?.city || prev.city,
-      state: apt.addressDetails?.state || prev.state
-    }));
-    setApartmentSuggestions([]);
-  };
-
-  const handlePincode = async (e) => {
-    const val = e.target.value;
-    handleInput(e);
-    if (val.length === 6) {
-      try {
-        const data = await getPincodeDetails(val);
-        if (data.city && data.state) {
-          setFormData(prev => ({ ...prev, city: data.city, state: data.state }));
-          setError('');
-        } else {
-          setError('Invalid Pincode');
-          setFormData(prev => ({ ...prev, city: '', state: '' }));
-        }
-      } catch (err) {
-        console.error(err);
-        setError('Failed to fetch pincode details');
-        setFormData(prev => ({ ...prev, city: '', state: '' }));
-      }
-    }
-  };
-
-  // --- Validation Helpers ---
-
-  const validateApartmentDetails = () => {
-    if (!formData.apartmentName) return 'Apartment Name is required';
-    if (!formData.floorNumber) return 'Floor Number is required';
-    return null;
-  };
-
-  const validateAddressDetails = () => {
-    if (!formData.pincode) return 'Pincode is required';
-    if (!formData.city || !formData.state) return 'City/State required (check pincode)';
-    if (!formData.houseNumber) return 'Flat/House No. is required';
-    if (!formData.area) return 'Area/Colony is required';
-    return null;
-  };
-
-  // --- Navigation ---
-
-  const nextStep = () => {
-    setError('');
-    let err = null;
-
-    if (activeStep === 2 && residenceType === 'apartment') {
-      err = validateApartmentDetails();
-    } else if (activeStep === 3) {
-      err = validateAddressDetails();
-    }
-
-    if (err) {
-      setError(err);
-      return;
-    }
-
-    setActiveStep(prev => prev + 1);
-  };
-
-  // --- API Calls ---
-
-  const handleSendOtp = async () => {
-    if (!formData.userPhone || formData.userPhone.length < 10) {
-      setError('Invalid phone number');
-      return;
-    }
-    setLoading(true);
-    setError('');
-    try {
-      console.log('[DEBUG] Sending OTP to:', formData.userPhone);
-      const res = await requestOtp(formData.userPhone);
-      setOtpSent(true);
-      setOtpReference(res.reference);
-      alert(`[OTP DEBUGGER] SMS sent to ${formData.userPhone}. OTP is: ${res.otp}`);
-    } catch (err) {
-      setError(err.response?.data?.error || 'Failed to send OTP');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleVerifyOtp = async () => {
-    if (!formData.otp) return;
-    setLoading(true);
-    setError('');
-    try {
-      console.log('[DEBUG] Verifying with reference:', otpReference);
-      await verifyOtp(otpReference, formData.otp);
-      setOtpVerified(true);
-    } catch (err) {
-      setError(err.response?.data?.error || 'Invalid OTP');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSave = async () => {
-    if (!initialData && !otpVerified) {
-      setError('Please verify OTP first');
-      return;
-    }
-    setLoading(true);
-    try {
-      const payload = {
-        type: residenceType,
-        apartmentDetails: residenceType === 'apartment' ? {
-          name: formData.apartmentName,
-          block: formData.block,
-          floorNumber: Number(formData.floorNumber),
-          totalFloors: Number(formData.totalFloors),
-          entranceType: formData.entranceType
-        } : undefined,
-        address: {
-          houseNumber: formData.houseNumber,
-          area: formData.area,
-          landmark: formData.landmark,
-          pincode: formData.pincode,
-          city: formData.city,
-          state: formData.state,
-          tags: formData.tags.split(',').map(t => t.trim()).filter(Boolean),
-          instructionsText: formData.instructions,
-          gateImageUrl: formData.gateImage,
-          instructionsAudioUrl: formData.audioInstruction
-        },
-        // User data only for new creation
-        user: !initialData ? {
-          name: formData.userName,
-          phone: formData.userPhone,
-          verified: true
-        } : undefined,
-        polylineData: {
-          polyline,
-          road_point: selectedRoadPoint,
-          destination_point: polyline[polyline.length - 1],
-          source: userLocation
-        }
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setFormData(prev => ({ ...prev, gateImage: reader.result }));
       };
+      reader.readAsDataURL(file);
+    }
+  };
 
-      if (initialData) {
-        // Update Mode
-        await updateResidence(initialData._id, payload);
-        alert('Address Updated!');
-        if (onSaveSuccess) onSaveSuccess();
-      } else {
-        // Create Mode
-        const res = await createResidence(payload);
-        setSuccessData({
-          code: res.addressCode,
-          household: res.household,
-          addressId: res.addressId,
-          quality_score: res.quality_score // Capture from API
+  const handleSnap = () => {
+    // Capture the current view (POV) so the summary looks exactly the same
+    if (panoramaRef.current) {
+      const pov = panoramaRef.current.getPov();
+      const zoom = panoramaRef.current.getZoom();
+      const position = panoramaRef.current.getPosition();
+
+      // Store explicit POV and finalized position (in case they moved down the street)
+      setFormData(prev => ({
+        ...prev,
+        gateVerified: true,
+        gatePov: pov,
+        gateZoom: zoom,
+        gatePosition: { lat: position.lat(), lng: position.lng() }
+      }));
+    } else {
+      setFormData(prev => ({ ...prev, gateVerified: true }));
+    }
+  };
+
+  const handleConstructRoute = () => {
+    // Direct Connect Mode: "Connect the dots no matter what"
+    const dots = waypoints;
+    if (dots.length < 1) return; // Allow single dot (On-road house)
+
+    setLoading(true);
+
+    let finalPath = dots;
+
+    // Only smooth if we have a path (2+ dots)
+    if (dots.length >= 2) {
+      finalPath = chaikinSmooth(dots, 4);
+    }
+
+    // 2. Commit to Store
+    setPolyline(finalPath);
+    setPolylineSegments([{ points: finalPath, mode: currentMode }]);
+
+    // 3. Move to Next Slide
+    setLoading(false);
+    nextSlide();
+  };
+
+  // Geocoding Helper
+  const extractAddressDetails = (place) => {
+    let details = {
+      houseNumber: '',
+      area: '',
+      city: '',
+      state: '',
+      postal_code: ''
+    };
+
+    if (place.address_components) {
+      place.address_components.forEach(component => {
+        const types = component.types;
+        if (types.includes('street_number')) details.houseNumber = component.long_name;
+        if (types.includes('sublocality') || types.includes('neighborhood')) details.area = component.long_name;
+        if (types.includes('locality')) details.city = component.long_name;
+        if (types.includes('administrative_area_level_1')) details.state = component.long_name;
+        if (types.includes('postal_code')) details.postal_code = component.long_name;
+      });
+    }
+
+    // Fallback for Area if empty
+    if (!details.area && place.formatted_address) {
+      const parts = place.formatted_address.split(',');
+      if (parts.length > 1) details.area = parts[parts.length - 2].trim();
+    }
+
+    return details;
+  };
+
+  const reverseGeocode = (lat, lng) => {
+    const geocoder = new window.google.maps.Geocoder();
+    geocoder.geocode({ location: { lat, lng } }, (results, status) => {
+      if (status === 'OK' && results[0]) {
+        const details = extractAddressDetails(results[0]);
+        setFormData(prev => ({ ...prev, tempDetails: details, tempFormatted: results[0].formatted_address }));
+      }
+    });
+  };
+
+  const onPlaceChanged = () => {
+    if (autocompleteRef.current) {
+      const place = autocompleteRef.current.getPlace();
+      if (place.geometry) {
+        setFocusPoint({
+          lat: place.geometry.location.lat(),
+          lng: place.geometry.location.lng()
+        });
+
+        const details = extractAddressDetails(place);
+        setFormData(prev => ({
+          ...prev,
+          tempLocation: { lat: place.geometry.location.lat(), lng: place.geometry.location.lng() },
+          tempDetails: details,
+          tempFormatted: place.formatted_address
+        }));
+      }
+    }
+  };
+
+  const nextSlide = () => setActiveSlide(prev => Math.min(prev + 1, 3));
+  const prevSlide = () => setActiveSlide(prev => Math.max(prev - 1, 0));
+
+  // Sync Map Mode
+  useEffect(() => {
+    useStore.getState().setWizardStep(activeSlide);
+
+    // Set Map Type: Satellite for drawing (Slide 1) and verification (Slide 2)
+    if (activeSlide >= 1 && activeSlide <= 2) {
+      setMapType('hybrid');
+    } else {
+      setMapType('roadmap');
+    }
+
+    // Toggle Drawing Logic (Only Slide 1 - Trace Path)
+    if (activeSlide === 1) {
+      useStore.getState().setDrawing(true);
+      // Logic for 'Self' vs 'Other' handled in render/effect below
+    } else {
+      useStore.getState().setDrawing(false);
+    }
+  }, [activeSlide, locationSource]);
+
+  // Trigger Reverse Geocode / Locate on Slide 1 (Map) if 'Self'
+  useEffect(() => {
+    if (activeSlide === 1) {
+      if (locationSource === 'current' && waypoints.length === 0) {
+        useStore.getState().setTriggerLocate(true);
+        navigator.geolocation.getCurrentPosition((pos) => {
+          const { latitude, longitude } = pos.coords;
+          reverseGeocode(latitude, longitude);
         });
       }
-    } catch (err) {
-      setError(err.response?.data?.error || 'Failed to save address');
-    } finally {
-      setLoading(false);
     }
-  };
+  }, [activeSlide, locationSource]);
 
-  // --- Add Member Handlers ---
 
-  const handleNewMemberInput = (e) => {
-    setNewMember({ ...newMember, [e.target.name]: e.target.value });
-  };
-
-  const handleNewMemberSendOtp = async () => {
-    if (!newMember.phone || newMember.phone.length < 10) return;
+  // Save Logic
+  const handleSave = async () => {
     setLoading(true);
-    try {
-      const res = await requestOtp(newMember.phone);
-      setNewMemberOtpSent(true);
-      alert(`[OTP DEBUGGER] SMS sent to ${newMember.phone}. OTP is: ${res.otp}`);
-    } catch (err) {
-      alert('Failed to send OTP');
-    } finally {
-      setLoading(false);
-    }
-  };
+    // Simulate API call
+    setTimeout(() => {
+      // Generate Unique Code
+      const randomPart = Math.random().toString(36).substring(2, 6).toUpperCase();
+      const code = `M-${randomPart}-NEW`;
 
-  const handleNewMemberVerifyOtp = async () => {
-    setLoading(true);
-    try {
-      await verifyOtp(newMember.phone, newMember.otp);
-      setNewMemberOtpVerified(true);
-    } catch (err) {
-      alert('Invalid OTP');
-    } finally {
-      setLoading(false);
-    }
-  };
+      setSuccessCode(code);
 
-  const handleAddMember = async () => {
-    if (!newMemberOtpVerified) return;
-    setLoading(true);
-    try {
-      const payload = {
-        name: newMember.name,
-        phone: newMember.phone,
-        relationship: newMember.relationship,
-        isPrimary: false
+      // Construct Final Address Object
+      const capturedDetails = formData.tempDetails || {
+        houseNumber: '', area: 'Unknown Area', city: 'Unknown City', state: ''
       };
-      const res = await addResidenceProfile(successData.addressId, payload);
-      // Update the successData with the new household data if returned, or just alert
-      // Assuming res.household contains the updated household with masked data
-      if (res.household) {
-        setSuccessData(prev => ({ ...prev, household: res.household }));
-      }
-      alert('Member added successfully');
-      setAddingMember(false);
-      setNewMember({ name: '', phone: '', otp: '', relationship: '' });
-      setNewMemberOtpSent(false);
-      setNewMemberOtpVerified(false);
-    } catch (err) {
-      console.error(err);
-      alert('Failed to add member');
-    } finally {
+
+      // Allow user override if they typed something specific (logic can be added)
+      // For now, mix captured with manual
+
+      const finalAddress = {
+        smartAddressCode: code,
+        residenceType: 'house',
+        userName: formData.userName,
+        addressLabel: formData.addressLabel,
+        addressDetails: {
+          houseNumber: formData.houseNumber || capturedDetails.houseNumber || 'N/A',
+          area: capturedDetails.area || 'Current Location',
+          city: capturedDetails.city,
+          state: capturedDetails.state,
+          postal_code: capturedDetails.postal_code,
+          formatted: formData.tempFormatted
+        },
+        apartmentDetails: {
+          block: formData.blockName,
+          floorNumber: formData.floorNumber
+        },
+        polylineOptimized: polyline, // <--- REAL ROUTE
+        gateImage: formData.gateImage,
+        gateVerified: formData.gateVerified,
+        gatePosition: formData.gatePosition,
+        gatePov: formData.gatePov,
+        gateZoom: formData.gateZoom,
+        transportMode: currentMode // <--- Save Mode for Styling
+      };
+
+      // Save to "Fake Backend" Map
+      useStore.getState().addCreatedAddress(code, {
+        address: finalAddress,
+        household: {
+          maskedDisplayData: {
+            primary: { maskedName: formData.userName || 'User', maskedPhone: '+91 ******9999' },
+            members: []
+          }
+        }
+      });
+
+      nextSlide();
       setLoading(false);
-    }
+    }, 1500);
   };
 
-  // --- Render ---
+  return (
+    <div className="wizard-container" style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
 
-  if (successData) {
-    return (
-      <section className="panel card success-view">
-        <div style={{ padding: '20px' }}>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '48px', marginBottom: '10px' }}>🎉</div>
-            <h3>Smart Address Created!</h3>
-            <div className="code-display" style={{
-              fontSize: '24px',
-              fontWeight: 'bold',
-              margin: '20px 0',
-              padding: '15px',
-              background: '#e8f5e9',
-              borderRadius: '8px',
-              color: '#2e7d32'
-            }}>
-              {successData.code}
-            </div>
+      {/* Track */}
+      <div className="wizard-track" style={{
+        transform: `translateX(-${activeSlide * 25}%)`,
+        width: '400%',
+        height: '100%',
+        display: 'flex',
+        transition: 'transform 0.3s ease'
+      }}>
 
-            {successData.quality_score && (
-              <div className="aqs-card" style={{ padding: 15, border: '1px solid #eee', borderRadius: 8, margin: '20px 0' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <strong>Address Quality Score</strong>
-                  <span className={`grade-badge ${successData.quality_score.grade}`}>
-                    {successData.quality_score.score} / 100
-                  </span>
-                </div>
-                <div style={{ fontSize: '12px', color: '#666', marginTop: 5 }}>
-                  Grade: {successData.quality_score.grade || 'POOR'}
-                  {successData.quality_score.score < 60 && ' (Needs Improvement)'}
-                </div>
-              </div>
-            )}
-          </div>
+        {/* Slide 0: Identity & Address Details */}
+        <div className="wizard-slide" style={{ width: '25%', height: '100%', overflowY: 'auto' }}>
+          <h3>Welcome</h3>
+          <p className="muted">Let's create a delivery address.</p>
 
-          <div className="house-profile">
-            <h4>House Profile</h4>
-            <div className="list">
-              {/* Primary */}
-              <div className="list-item">
-                <div className="avatar">{successData.household.maskedDisplayData.primary.maskedName[0]}</div>
-                <div style={{ flex: 1 }}>
-                  <div><strong>{successData.household.maskedDisplayData.primary.maskedName}</strong> <span className="badge">Primary</span></div>
-                  <div className="muted">{successData.household.maskedDisplayData.primary.maskedPhone}</div>
-                </div>
-                <div className="verified-badge">Verified</div>
-              </div>
+          <MinimalField label="Account Name / User Name">
+            <input className="modern-input" name="userName" value={formData.userName} onChange={handleInput} placeholder="e.g. John Doe" />
+          </MinimalField>
 
-              {/* Members */}
-              {successData.household.maskedDisplayData.members.map((u, i) => (
-                <div key={i} className="list-item">
-                  <div className="avatar">{u.maskedName[0]}</div>
-                  <div style={{ flex: 1 }}>
-                    <div><strong>{u.maskedName}</strong> {u.relationship && <span className="muted">({u.relationship})</span>}</div>
-                    <div className="muted">{u.maskedPhone}</div>
-                  </div>
-                  <div className="verified-badge">Verified</div>
-                </div>
+          <MinimalField label="Save Address As (e.g. Home, Hostel)">
+            <input className="modern-input" name="addressLabel" value={formData.addressLabel || ''} onChange={handleInput} placeholder="e.g. My Flat, School" />
+            <div style={{ display: 'flex', gap: 5, marginTop: 10, flexWrap: 'wrap' }}>
+              {['Home', 'Office', 'School', 'Hostel'].map(tag => (
+                <span key={tag} className="tag-pill" onClick={() => setFormData(p => ({ ...p, addressLabel: tag }))}>
+                  {tag}
+                </span>
               ))}
             </div>
+          </MinimalField>
 
-            {addingMember ? (
-              <div className="add-member-form" style={{ marginTop: 16, padding: 12, background: '#f5f5f5', borderRadius: 8 }}>
-                <h5>Add New Member</h5>
-                <div className="form-grid">
-                  <input name="name" placeholder="Name" value={newMember.name} onChange={handleNewMemberInput} />
-                  <input name="relationship" placeholder="Relationship (e.g. Spouse)" value={newMember.relationship} onChange={handleNewMemberInput} />
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <input name="phone" placeholder="Phone" value={newMember.phone} onChange={handleNewMemberInput} disabled={newMemberOtpVerified} />
-                    {!newMemberOtpVerified && (
-                      <button className="small-btn" onClick={handleNewMemberSendOtp} disabled={loading || newMemberOtpSent}>
-                        {newMemberOtpSent ? 'Resend' : 'OTP'}
-                      </button>
-                    )}
-                  </div>
-                  {newMemberOtpSent && !newMemberOtpVerified && (
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <input name="otp" placeholder="OTP" value={newMember.otp} onChange={handleNewMemberInput} maxLength={4} />
-                      <button className="small-btn" onClick={handleNewMemberVerifyOtp}>Verify</button>
-                    </div>
-                  )}
-                </div>
-                <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
-                  <button className="control-btn" onClick={handleAddMember} disabled={!newMemberOtpVerified}>Add</button>
-                  <button className="small-btn" onClick={() => setAddingMember(false)}>Cancel</button>
-                </div>
+          <label className="field-label">For whom is this address?</label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
+            <button
+              className={`pill ${formData.addressContext === 'self' ? 'active' : ''}`}
+              onClick={() => { setFormData({ ...formData, addressContext: 'self' }); setLocationSource('current'); }}
+            >
+              👤 Myself (Use Current Location)
+            </button>
+            <button
+              className={`pill ${formData.addressContext === 'other' ? 'active' : ''}`}
+              onClick={() => { setFormData({ ...formData, addressContext: 'other' }); setLocationSource('manual'); }}
+            >
+              👥 Someone Else (Search Location)
+            </button>
+
+            {formData.addressContext === 'other' && (
+              <div style={{ marginTop: 8, padding: 12, background: '#f8f9fa', borderRadius: 8, border: '1px solid #e0e0e0' }}>
+                <div style={{ fontSize: 12, color: '#666', marginBottom: 6, fontWeight: 500 }}>Search their location:</div>
+                <Autocomplete onLoad={ref => autocompleteRef.current = ref} onPlaceChanged={onPlaceChanged}>
+                  <input className="modern-input" placeholder="🔍 Enter Area / Colony / City" autoFocus style={{ border: '1px solid #4285F4', borderRadius: 4 }} />
+                </Autocomplete>
               </div>
-            ) : (
-              <button className="small-btn full-width" style={{ marginTop: 10 }} onClick={() => setAddingMember(true)}>
-                + Add Another Member
-              </button>
             )}
           </div>
 
-          <div style={{ marginTop: 30, textAlign: 'center' }}>
-            <button className="control-btn" onClick={() => window.location.reload()}>
-              Create Another Address
+          <label className="field-label">Address Details</label>
+          <div className="form-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+            <div>
+              <input className="modern-input" name="houseNumber" value={formData.houseNumber} onChange={handleInput} placeholder="House No." />
+            </div>
+            <div>
+              <input className="modern-input" name="floorNumber" value={formData.floorNumber} onChange={handleInput} placeholder="Floor No." />
+            </div>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <input className="modern-input" name="blockName" value={formData.blockName} onChange={handleInput} placeholder="Block / Tower" />
+          </div>
+
+          <MinimalField label="Nearby Landmark (Optional)">
+            <input className="modern-input" name="landmark" value={formData.landmark} onChange={handleInput} placeholder="e.g. Near Mother Dairy" />
+          </MinimalField>
+
+          <div style={{ marginTop: 12, paddingBottom: 20 }}>
+            <button className="control-btn" onClick={nextSlide}>
+              Continue to Map →
             </button>
           </div>
         </div>
-        <style>{`
-          .house-profile { margin-top: 20px; border-top: 1px solid #eee; padding-top: 20px; }
-          .avatar { width: 32px; height: 32px; background: #ddd; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 10px; }
-          .verified-badge { font-size: 10px; background: #e8f5e9; color: #2e7d32; padding: 2px 6px; border-radius: 4px; }
-          .badge { font-size: 10px; background: #e3f2fd; color: #1565c0; padding: 2px 4px; border-radius: 4px; margin-left: 5px; }
-        `}</style>
-      </section>
-    );
-  }
 
-  return (
-    <section className="panel card">
-      <div className="panel-header">
-        <h3>Create Smart Address</h3>
-      </div>
+        {/* Slide 1: Map & Draw */}
+        <div className="wizard-slide">
+          {/* Smart Header: Locate Logic - Search occurs in Slide 0 */}
 
-      <div className="steps-container">
-        {/* Step 1: Residence Type */}
-        <StepCard
-          title="1. Residence Type"
-          active={activeStep === 1}
-          completed={activeStep > 1}
-          onClick={() => setActiveStep(1)}
-          stepNumber={1}
-        >
-          <div className="type-selection">
-            <button
-              className={`type-card ${residenceType === 'villa' ? 'selected' : ''}`}
-              onClick={() => { setResidenceType('villa'); setActiveStep(3); }}
-            >
-              <div className="icon-box">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-                  <polyline points="9 22 9 12 15 12 15 22"></polyline>
-                </svg>
+          <h3>Trace Path to Gate</h3>
+          <p className="muted">1. Tap dots along the road to your gate.<br />2. Click "Construct".</p>
+
+          <div className="floating-mode-bar">
+            {['walking', 'bike', 'car'].map(mode => (
+              <div key={mode} className={`mode-icon ${currentMode === mode ? 'active' : ''}`} onClick={() => setCurrentMode(mode)}>
+                <span style={{ fontSize: 20 }}>{mode === 'walking' ? '🚶' : mode === 'bike' ? '🚴' : '🚗'}</span>
+                <span style={{ fontSize: 12, fontWeight: 600 }}>{mode.toUpperCase()}</span>
               </div>
-              <span>Villa / House</span>
-            </button>
-            <button
-              className={`type-card ${residenceType === 'apartment' ? 'selected' : ''}`}
-              onClick={() => { setResidenceType('apartment'); setActiveStep(2); }}
-            >
-              <div className="icon-box">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect>
-                  <line x1="9" y1="22" x2="9" y2="22.01"></line>
-                  <line x1="15" y1="22" x2="15" y2="22.01"></line>
-                  <line x1="12" y1="22" x2="12" y2="22.01"></line>
-                  <line x1="12" y1="18" x2="12" y2="18.01"></line>
-                  <line x1="9" y1="18" x2="9" y2="18.01"></line>
-                  <line x1="15" y1="18" x2="15" y2="18.01"></line>
-                  <line x1="12" y1="14" x2="12" y2="14.01"></line>
-                  <line x1="9" y1="14" x2="9" y2="14.01"></line>
-                  <line x1="15" y1="14" x2="15" y2="14.01"></line>
-                  <line x1="12" y1="10" x2="12" y2="10.01"></line>
-                  <line x1="9" y1="10" x2="9" y2="10.01"></line>
-                  <line x1="15" y1="10" x2="15" y2="10.01"></line>
-                  <line x1="12" y1="6" x2="12" y2="6.01"></line>
-                  <line x1="9" y1="6" x2="9" y2="6.01"></line>
-                  <line x1="15" y1="6" x2="15" y2="6.01"></line>
-                </svg>
-              </div>
-              <span>Apartment</span>
-            </button>
-          </div>
-        </StepCard>
-
-        {/* Step 2: Apartment Details (Only for Apartment) */}
-        {residenceType === 'apartment' && (
-          <StepCard
-            title="2. Apartment Details"
-            active={activeStep === 2}
-            completed={activeStep > 2}
-            onClick={() => activeStep > 1 && setActiveStep(2)}
-            stepNumber={2}
-          >
-            <div className="form-grid">
-              <Field label="Apartment Name" required>
-                <input
-                  className="modern-input"
-                  name="apartmentName"
-                  value={formData.apartmentName}
-                  onChange={handleApartmentSearch}
-                  placeholder="Search apartment..."
-                  autoComplete="off"
-                />
-                {apartmentSuggestions.length > 0 && (
-                  <div className="suggestions-list">
-                    {apartmentSuggestions.map((apt, i) => (
-                      <div key={i} className="suggestion-item" onClick={() => selectApartment(apt)}>
-                        {apt.apartmentDetails.name} <small>({apt.addressDetails?.city || 'Unknown'})</small>
-                        {apt.source === 'places_api' && <span style={{ fontSize: '10px', float: 'right', color: '#999' }}>Places API</span>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </Field>
-              <Field label="Block / Tower">
-                <input className="modern-input" name="block" value={formData.block} onChange={handleInput} placeholder="Block A" />
-              </Field>
-              <Field label="Floor No." required>
-                <input className="modern-input" type="number" name="floorNumber" value={formData.floorNumber} onChange={handleInput} />
-              </Field>
-              <Field label="Total Floors">
-                <input className="modern-input" type="number" name="totalFloors" value={formData.totalFloors} onChange={handleInput} />
-              </Field>
-              <Field label="Entrance Type">
-                <select className="modern-input" name="entranceType" value={formData.entranceType} onChange={handleInput}>
-                  <option value="">Select...</option>
-                  <option value="Main Gate">Main Gate</option>
-                  <option value="Side Entrance">Side Entrance</option>
-                  <option value="Basement">Basement</option>
-                  <option value="Lift Lobby">Lift Lobby</option>
-                </select>
-              </Field>
-            </div>
-            <div style={{ marginTop: 16, textAlign: 'right' }}>
-              <button className="control-btn" onClick={nextStep}>Next: Address</button>
-            </div>
-          </StepCard>
-        )}
-
-        {/* Step 3: Address Details (Common) */}
-        <StepCard
-          title={residenceType === 'apartment' ? "3. Address Details" : "2. Address Details"}
-          active={activeStep === 3}
-          completed={activeStep > 3}
-          onClick={() => activeStep > 2 && setActiveStep(3)}
-          stepNumber={residenceType === 'apartment' ? 3 : 2}
-        >
-          <div className="form-grid">
-            <Field label="Pincode" required>
-              <input className="modern-input" name="pincode" value={formData.pincode} onChange={handlePincode} maxLength={6} placeholder="110001" />
-            </Field>
-            <Field label="City" required>
-              <input className="modern-input" name="city" value={formData.city} onChange={handleInput} placeholder="City" />
-            </Field>
-            <Field label="State" required>
-              <input className="modern-input" name="state" value={formData.state} onChange={handleInput} placeholder="State" />
-            </Field>
-            <Field label={residenceType === 'villa' ? "House No." : "Flat No."} required>
-              <input className="modern-input" name="houseNumber" value={formData.houseNumber} onChange={handleInput} placeholder="#" />
-            </Field>
-            <Field label="Area / Colony" required>
-              <input className="modern-input" name="area" value={formData.area} onChange={handleInput} placeholder="Sector 4" />
-            </Field>
-            <Field label="Landmark">
-              <input className="modern-input" name="landmark" value={formData.landmark} onChange={handleInput} />
-            </Field>
-            <Field label="Tags">
-              <input className="modern-input" name="tags" value={formData.tags} onChange={handleInput} placeholder="e.g. Green Gate" />
-            </Field>
-            <Field label="Instructions">
-              <input className="modern-input" name="instructions" value={formData.instructions} onChange={handleInput} placeholder="Leave at door" />
-            </Field>
+            ))}
           </div>
 
-          <div className="form-grid" style={{ marginTop: 20, borderTop: '1px solid #eee', paddingTop: 10 }}>
-            <Field label="Gate Image (For Delivery)">
-              <div style={{ display: 'flex', gap: 10 }}>
-                <label className="upload-box" style={{ flex: 1 }}>
-                  {formData.gateImage ? (formData.gateImage.includes('streetview') ? 'Street View Captured' : 'Image Uploaded') : 'Upload Photo'}
-                  <input type="file" name="gateImage" onChange={handleFileChange} accept="image/*" style={{ display: 'none' }} />
-                </label>
-                <button
-                  className="upload-box"
-                  style={{ flex: 1, background: '#f0f8ff', border: '1px dashed #2196f3', color: '#2196f3' }}
-                  onClick={() => setFormData(prev => ({ ...prev, gateImage: 'https://maps.googleapis.com/maps/api/streetview?size=400x400&location=12.935,77.614' }))}
-                >
-                  Capture Street View
-                </button>
-              </div>
-            </Field>
-            <Field label="Audio Instructions">
-              <label className="upload-box">
-                {formData.audioInstruction ? 'Audio Selected' : 'Tap to upload Audio'}
-                <input type="file" name="audioInstruction" onChange={handleFileChange} accept="audio/*" style={{ display: 'none' }} />
-              </label>
-            </Field>
-          </div>
-
-          {error && <div className="alert danger" style={{ marginTop: 10 }}>{error}</div>}
-
-          <div style={{ marginTop: 16, textAlign: 'right' }}>
-            <button className="control-btn" onClick={nextStep}>Next: Map & Route</button>
-          </div>
-        </StepCard>
-
-        {/* Step 4: Map & Route */}
-        <StepCard
-          title={residenceType === 'apartment' ? "4. Smart Route" : "3. Smart Route"}
-          active={activeStep === 4}
-          completed={activeStep > 4}
-          onClick={() => activeStep > 3 && setActiveStep(4)}
-          stepNumber={residenceType === 'apartment' ? 4 : 3}
-        >
-          <div className="route-instructions">
-            <p>1. Tap on the road to set the vehicle drop-off point.</p>
-            <p>2. Draw the path to your doorstep.</p>
-          </div>
-
-          <div className="route-summary" style={{ margin: '10px 0' }}>
-            <div><strong>Road Point:</strong> {selectedRoadPoint ? 'Set ✅' : 'Not set'}</div>
-            <div><strong>Path:</strong> {polyline.length > 1 ? `${polyline.length} points` : 'Not drawn'}</div>
-          </div>
-
-          <div style={{ marginTop: 16, textAlign: 'right' }}>
-            <button
-              className="control-btn"
-              disabled={!routeReady}
-              onClick={() => setActiveStep(5)}
-            >
-              Next: Verification
-            </button>
-          </div>
-        </StepCard>
-
-        {/* Step 5: Verification (Only for New Creation) */}
-        {!initialData && (
-          <StepCard
-            title={residenceType === 'apartment' ? "5. Verification" : "4. Verification"}
-            active={activeStep === 5}
-            completed={false}
-            onClick={() => activeStep > 4 && setActiveStep(5)}
-            stepNumber={residenceType === 'apartment' ? 5 : 4}
-          >
-            <div className="form-grid">
-              <Field label="Your Name">
-                <input className="modern-input" name="userName" value={formData.userName} onChange={handleInput} placeholder="John Doe" />
-              </Field>
-              <Field label="Phone Number">
-                <div className="input-with-button">
-                  <input
-                    className="modern-input"
-                    name="userPhone"
-                    value={formData.userPhone}
-                    onChange={handleInput}
-                    placeholder="9876543210"
-                    disabled={otpVerified}
-                  />
-                  {!otpVerified && (
-                    <button className="otp-btn" onClick={handleSendOtp} disabled={loading}>
-                      {otpSent ? 'Resend' : 'Send OTP'}
-                    </button>
-                  )}
-                  {otpVerified && <span style={{ position: 'absolute', right: 10, color: 'green' }}>✅</span>}
-                </div>
-              </Field>
-
-              {otpSent && !otpVerified && (
-                <Field label="Enter OTP">
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <input
-                      className="modern-input"
-                      name="otp"
-                      value={formData.otp}
-                      onChange={handleInput}
-                      placeholder="1234"
-                      maxLength={4}
-                    />
-                    <button className="small-btn" onClick={handleVerifyOtp} disabled={loading}>
-                      Verify
-                    </button>
-                  </div>
-                  <div style={{ fontSize: '11px', color: '#666', marginTop: 4 }}>
-                    * Check screen for OTP alert (Mock Mode)
-                  </div>
-                </Field>
-              )}
+          <div style={{ textAlign: 'center', marginTop: 20 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 15, fontWeight: 500 }}>
+              {waypoints.length === 0 ? '👇 Tap on the road to start tracing' :
+                waypoints.length === 1 ? '✅ Last Point = Gate. Add more path points if needed.' :
+                  `${waypoints.length} path points placed.`}
             </div>
 
-            {error && <div className="alert danger" style={{ marginTop: 10 }}>{error}</div>}
-
-            <div style={{ marginTop: 20 }}>
+            {waypoints.length > 0 && (
               <button
-                className="control-btn full-width"
-                disabled={!otpVerified || loading}
-                onClick={handleSave}
+                className="small-btn"
+                style={{ margin: '0 auto', display: 'flex', gap: 6, alignItems: 'center' }}
+                onClick={() => useStore.getState().setWaypoints(waypoints.slice(0, -1))}
               >
-                {loading ? 'Saving...' : 'Save Smart Address'}
+                ↩ Undo Last Point
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Slide 2: Verification */}
+        <div className="wizard-slide">
+          <h3>Gate Verification</h3>
+          <p className="minimal-label">Confirm the gate view.</p>
+
+          <div className="camera-box">
+            {!formData.gateImage ? (
+              activeSlide === 2 && (
+                <GoogleMap
+                  mapContainerStyle={{ width: '100%', height: '100%' }}
+                  zoom={18}
+                  center={waypoints.length > 0 ? waypoints[waypoints.length - 1] : defaultCenter}
+                >
+                  <StreetViewPanorama
+                    position={waypoints.length > 0 ? waypoints[waypoints.length - 1] : defaultCenter}
+                    visible={true}
+                    options={{ disableDefaultUI: true, enableCloseButton: false }}
+                    onLoad={pano => panoramaRef.current = pano}
+                  />
+                </GoogleMap>
+              )
+            ) : (
+              <img src={formData.gateImage} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            )}
+
+            <div style={{ position: 'absolute', bottom: 16, left: 0, right: 0, display: 'flex', justifyContent: 'center', gap: 12, zIndex: 10 }}>
+              {!formData.gateImage && <button className="control-btn" style={{ width: 'auto', padding: '0 24px' }} onClick={handleSnap}>📸 Snap</button>}
+              <label className="control-btn outline" style={{ width: 'auto', padding: '0 24px' }}>
+                📂 Upload
+                <input type="file" hidden onChange={handleFileUpload} accept="image/*" />
+              </label>
+            </div>
+          </div>
+          {formData.gateImage && (
+            <button style={{ marginTop: 12, width: '100%' }} className="small-btn" onClick={() => setFormData(prev => ({ ...prev, gateImage: null }))}>Retake Photo</button>
+          )}
+        </div>
+
+        {/* Slide 3: Summary */}
+        <div className="wizard-slide" style={{ overflowY: 'auto' }}>
+          <div style={{ textAlign: 'center', marginBottom: 16 }}>
+            <h3>Address Created! 🎉</h3>
+            <p className="muted">Your Miles code is ready.</p>
+          </div>
+
+          <div className="list-item" style={{ display: 'block', padding: 0, overflow: 'hidden', gap: 0 }}>
+            <div className="summary-visual">
+              {formData.gateImage && !formData.gateImage.includes('svg') ? (
+                <img src={formData.gateImage} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                <GoogleMap
+                  mapContainerStyle={{ width: '100%', height: '100%' }}
+                  zoom={18}
+                  center={waypoints.length > 0 ? waypoints[waypoints.length - 1] : defaultCenter}
+                  options={{ disableDefaultUI: true }}
+                >
+                  <StreetViewPanorama
+                    position={formData.gatePosition || (waypoints.length > 0 ? waypoints[waypoints.length - 1] : defaultCenter)}
+                    visible={true}
+                    options={{
+                      disableDefaultUI: true,
+                      clickToGo: false,
+                      linksControl: false,
+                      panControl: false,
+                      enableCloseButton: false,
+                      pov: formData.gatePov,
+                      zoom: formData.gateZoom
+                    }}
+                  />
+                </GoogleMap>
+              )}
+
+              <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.8), transparent)', color: 'white', padding: 20, zIndex: 10 }}>
+                <div style={{ fontSize: 20, fontWeight: 'bold' }}>{formData.addressLabel || 'My Address'}</div>
+                <div style={{ fontSize: 13, opacity: 0.9 }}>{formData.userName} • {formData.addressContext}</div>
+              </div>
+            </div>
+
+            <div style={{ padding: 24, textAlign: 'center', borderBottom: '1px solid var(--border-light)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 2, fontWeight: 700 }}>Miles Code</div>
+              <div style={{ fontSize: 40, fontWeight: '800', color: 'var(--accent-color)', letterSpacing: -1, margin: '8px 0' }}>{successCode || '...'}</div>
+
+              <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 8 }}>
+                {formData.blockName ? `${formData.blockName}, ` : ''} {formData.floorNumber ? `${formData.floorNumber}, ` : ''} {formData.houseNumber}
+              </div>
+
+              {/* Route Guide */}
+              {(() => {
+                const dist = pathDistanceMeters(waypoints);
+                const steps = Math.round(dist / 0.762);
+                const mode = currentMode;
+                let tMin = mode === 'walking' ? Math.round(dist / 83) : mode === 'bike' ? Math.round(dist / 250) : Math.round(dist / 500);
+                if (tMin < 1) tMin = 1;
+
+                const instr = mode === 'walking' ? `Reach ${startLocationName}, then Walk:`
+                  : mode === 'bike' ? `Reach ${startLocationName}, then Bike:`
+                    : `Drive via ${startLocationName} to Gate:`;
+
+                return (
+                  <div style={{
+                    background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
+                    padding: '16px',
+                    borderRadius: '12px',
+                    margin: '20px 0',
+                    textAlign: 'left',
+                    boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
+                    color: 'white',
+                    border: '1px solid rgba(255,255,255,0.1)'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: 8 }}>
+                      <span style={{ fontSize: 18 }}>{mode === 'walking' ? '🚶' : mode === 'bike' ? '🚴' : '🚗'}</span>
+                      <span style={{ fontWeight: 700, fontSize: 14, textTransform: 'uppercase', letterSpacing: 1, color: '#94a3b8' }}>Route Stats</span>
+                    </div>
+
+                    <div style={{ fontSize: 13, marginBottom: 16, color: '#e2e8f0', lineHeight: 1.4 }}>{instr}</div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+                      <div style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: '8px', textAlign: 'center' }}>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: '#38bdf8' }}>{tMin}</div>
+                        <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase' }}>Min</div>
+                      </div>
+                      <div style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: '8px', textAlign: 'center' }}>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: '#4ade80' }}>{Math.round(dist)}</div>
+                        <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase' }}>Meters</div>
+                      </div>
+                      {mode === 'walking' && (
+                        <div style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: '8px', textAlign: 'center' }}>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#f472b6' }}>{steps}</div>
+                          <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase' }}>Steps</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div style={{ height: 180, position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid rgba(0,0,0,0.1)' }}>
+                <GoogleMap
+                  mapContainerStyle={{ width: '100%', height: '100%' }}
+                  zoom={18}
+                  center={waypoints.length > 0 ? waypoints[waypoints.length - 1] : defaultCenter}
+                  options={{ disableDefaultUI: true, mapTypeId: 'hybrid' }}
+                >
+                  {polylineSegments.map((seg, i) => (
+                    <Polyline
+                      key={i}
+                      path={seg.points}
+                      options={{
+                        strokeColor:
+                          seg.mode === 'bike' ? '#FFFF00' :
+                            seg.mode === 'walking' ? '#00E5FF' :
+                              '#4285F4',
+                        strokeWeight: 4,
+                        strokeOpacity: 1.0
+                      }}
+                    />
+                  ))}
+                  {waypoints.map((pt, i) => (
+                    <Marker key={i} position={pt} icon={{ path: window.google?.maps?.SymbolPath?.CIRCLE, scale: 3, fillColor: 'white', fillOpacity: 1 }} />
+                  ))}
+                </GoogleMap>
+                <div style={{ position: 'absolute', bottom: 10, right: 10, background: 'white', padding: '4px 8px', borderRadius: 4, fontSize: 10, fontWeight: 'bold', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                  {polyline.length - 1} Steps
+                </div>
+              </div>
+            </div>
+
+            <div style={{ padding: 16 }}>
+              <button className="control-btn outline" style={{ width: '100%' }} onClick={() => window.location.reload()}>
+                Create Another
               </button>
             </div>
-          </StepCard>
-        )}
-
-        {/* Save Button for Edit Mode */}
-        {initialData && activeStep === 4 && (
-          <div style={{ marginTop: 20 }}>
-            <button className="control-btn full-width" onClick={handleSave} disabled={loading}>
-              Update Address
-            </button>
           </div>
-        )}
+        </div>
+
       </div>
 
-      <style>{`
-        .suggestions-list {
-          position: absolute;
-          background: white;
-          border: 1px solid #ddd;
-          width: 100%;
-          z-index: 10;
-          max-height: 200px;
-          overflow-y: auto;
-          box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-        .suggestion-item {
-          padding: 8px 12px;
-          cursor: pointer;
-        }
-        .suggestion-item:hover {
-          background: #f5f5f5;
-        }
-        .control-btn.full-width {
-          width: 100%;
-          padding: 12px;
-          font-size: 16px;
-        }
-        .house-profile { margin-top: 20px; border-top: 1px solid #eee; padding-top: 20px; }
-        .avatar { width: 32px; height: 32px; background: #ddd; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 10px; }
-        .verified-badge { font-size: 10px; background: #e8f5e9; color: #2e7d32; padding: 2px 6px; border-radius: 4px; }
-        .badge { font-size: 10px; background: #e3f2fd; color: #1565c0; padding: 2px 4px; border-radius: 4px; margin-left: 5px; }
-      `}</style>
-    </section>
+      {/* Navigation Bars */}
+      {activeSlide < 4 && (
+        <div className="wizard-nav" style={{ position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 100 }}>
+          {activeSlide > 0 && activeSlide < 3 ? <button className="small-btn" onClick={prevSlide}>Back</button> : <div />}
+
+          <div className="nav-dots">
+            {[0, 1, 2, 3].map(i => <div key={i} className={`dot ${activeSlide === i ? 'active' : ''}`} />)}
+          </div>
+
+          {activeSlide === 1 && (
+            <button
+              className="control-btn"
+              style={{ width: 'auto', padding: '0 32px' }}
+              onClick={handleConstructRoute}
+              disabled={(activeSlide === 1 && waypoints.length === 0)}
+            >
+              Construct Route
+            </button>
+          )}
+          {activeSlide === 2 && (
+            <button
+              className="control-btn"
+              style={{ width: 'auto', padding: '0 32px' }}
+              onClick={handleSave}
+              disabled={!formData.gateImage && !formData.gateVerified}
+            >
+              Finish
+            </button>
+          )}
+        </div>
+      )}
+
+    </div>
   );
 }

@@ -43,9 +43,8 @@ const AddressSchema = new mongoose.Schema(
     owner_phone_masked: { type: String, default: '' },
     owner_phone_encrypted: { type: String, default: '' },
     owner_name_masked: { type: String, default: '' },
-    owner_phone_encrypted: { type: String, default: '' },
-    owner_name_masked: { type: String, default: '' },
     owner_name_encrypted: { type: String, default: '' },
+    transport_mode: { type: String, enum: ['walking', 'bike', 'car'], default: 'car' }, // <--- New Field
 
     // AQS & Extended Fields
     gate_image: {

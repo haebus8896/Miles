@@ -4,6 +4,8 @@ const { buildRouteArtifacts } = require('../services/polylineService');
 const { maskName, maskPhone } = require('../utils/mask');
 const { encrypt } = require('../utils/encryption');
 const { findNearestRoad, detectDuplicateAddresses, toPoint } = require('../services/geoService');
+const AddressRecord = require('../models/AddressRecord');
+const Residence = require('../models/Residence');
 
 const serializeAddress = (doc) => ({
   id: doc._id,
@@ -28,25 +30,13 @@ const serializeAddress = (doc) => ({
     ? { lat: doc.destination_point.coordinates[1], lng: doc.destination_point.coordinates[0] }
     : null,
   polyline_smoothed: doc.polyline_smoothed,
+  transport_mode: doc.transport_mode, // <--- EXPOSE MODE
   owner_name_masked: doc.owner_name_masked,
   owner_phone_masked: doc.owner_phone_masked,
   door_photo: doc.door_photo,
-  door_photo: doc.door_photo,
-  quality_score: doc.quality_score, // Expose AQS
+  quality_score: doc.quality_score,
   createdAt: doc.createdAt
 });
-
-const normalizeLatLng = (point = {}) => {
-  if (point.lat === undefined || point.lng === undefined) {
-    throw new Error('lat/lng required');
-  }
-  return {
-    lat: Number(point.lat),
-    lng: Number(point.lng)
-  };
-};
-
-const Residence = require('../models/Residence');
 
 const serializeResidence = (doc) => ({
   id: doc._id,
@@ -73,6 +63,42 @@ const serializeResidence = (doc) => ({
   createdAt: doc.createdAt
 });
 
+const serializeAddressRecord = (doc) => ({
+  id: doc._id,
+  code: doc.smartAddressCode,
+  type: doc.residenceType,
+  official_address: [
+    doc.addressDetails.houseNumber,
+    doc.apartmentDetails?.name,
+    doc.addressDetails.area,
+    doc.addressDetails.city
+  ].filter(Boolean).join(', '),
+  landmark: doc.addressDetails.landmark,
+  locality: doc.addressDetails.area,
+  city: doc.addressDetails.city,
+  postal_code: doc.addressDetails.pincode,
+  route_length_meters: doc.route_length_meters,
+  road_point: doc.road_point
+    ? { lat: doc.road_point.coordinates[1], lng: doc.road_point.coordinates[0] }
+    : null,
+  destination_point: doc.destination_point
+    ? { lat: doc.destination_point.coordinates[1], lng: doc.destination_point.coordinates[0] }
+    : null,
+  polyline_smoothed: doc.polylineOptimized, // AddressRecord uses polylineOptimized
+  transport_mode: doc.transport_mode, // Ensure this model also supports it if possible, but mainly for Address model now
+  createdAt: doc.createdAt
+});
+
+const normalizeLatLng = (point = {}) => {
+  if (point.lat === undefined || point.lng === undefined) {
+    throw new Error('lat/lng required');
+  }
+  return {
+    lat: Number(point.lat),
+    lng: Number(point.lng)
+  };
+};
+
 exports.createAddress = async (req, res) => {
   const {
     official_address,
@@ -90,7 +116,8 @@ exports.createAddress = async (req, res) => {
     road_point,
     destination_point,
     owner_full_name = '',
-    owner_phone = ''
+    owner_phone = '',
+    transport_mode = 'car' // <--- EXTRACT
   } = req.body;
 
   const lastPolylinePoint = polyline && polyline.length ? polyline[polyline.length - 1] : null;
@@ -143,11 +170,12 @@ exports.createAddress = async (req, res) => {
     owner_phone_masked: owner_phone ? maskPhone(owner_phone) : '',
     owner_name_encrypted: owner_full_name ? encrypt(owner_full_name) : '',
     owner_phone_encrypted: owner_phone ? encrypt(owner_phone) : '',
+    transport_mode, // <--- SAVE
 
     // AQS Calculation
     quality_score: require('../utils/aqsCalculator').calculateAQS({
       flat_no,
-      houseNumber: flat_no, // mapping for calculator
+      houseNumber: flat_no,
       floor_no,
       city,
       postal_code,
@@ -157,7 +185,7 @@ exports.createAddress = async (req, res) => {
       landmark,
       instructions,
       door_photo,
-      owner_phone_masked: owner_phone // assumes presence implies verified in this flow
+      owner_phone_masked: owner_phone
     })
   });
 
@@ -211,47 +239,17 @@ exports.getAddressByCode = async (req, res) => {
   }
 
   // 2. Try finding in AddressRecord (New Smart Address)
-  // Smart Addresses use a different code format usually, but we check both.
   const recordQuery = isObjectId ? { _id: codeOrId } : { smartAddressCode: codeOrId.toUpperCase() };
   const recordDoc = await AddressRecord.findOne(recordQuery);
 
   if (recordDoc) {
-    // Map AddressRecord to the schema expected by the navigation app
     const serialized = serializeAddressRecord(recordDoc);
-    // Explicitly set `code` to smartAddressCode for compatibility
     serialized.code = recordDoc.smartAddressCode;
     return res.json({ address: serialized });
   }
 
   return res.status(404).json({ error: 'Address not found' });
 };
-
-const AddressRecord = require('../models/AddressRecord');
-
-const serializeAddressRecord = (doc) => ({
-  id: doc._id,
-  code: doc.smartAddressCode,
-  type: doc.residenceType,
-  official_address: [
-    doc.addressDetails.houseNumber,
-    doc.apartmentDetails?.name,
-    doc.addressDetails.area,
-    doc.addressDetails.city
-  ].filter(Boolean).join(', '),
-  landmark: doc.addressDetails.landmark,
-  locality: doc.addressDetails.area,
-  city: doc.addressDetails.city,
-  postal_code: doc.addressDetails.pincode,
-  route_length_meters: doc.route_length_meters,
-  road_point: doc.road_point
-    ? { lat: doc.road_point.coordinates[1], lng: doc.road_point.coordinates[0] }
-    : null,
-  destination_point: doc.destination_point
-    ? { lat: doc.destination_point.coordinates[1], lng: doc.destination_point.coordinates[0] }
-    : null,
-  polyline_smoothed: doc.polylineOptimized, // AddressRecord uses polylineOptimized
-  createdAt: doc.createdAt
-});
 
 exports.getNearby = async (req, res) => {
   const lat = parseFloat(req.query.lat);

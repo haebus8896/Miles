@@ -12,9 +12,9 @@ const SmartRoad = ({ segment, onSelectRoad }) => {
     <Polyline
       path={segment}
       options={{
-        strokeColor: '#000000', // Color doesn't matter much if opacity is 0, but useful for debug
-        strokeOpacity: 0,       // Invisible
-        strokeWeight: 22,       // Wide hit area
+        strokeColor: '#4285F4', // Google Blue to match "highlight" style
+        strokeOpacity: 0.6,     // Visible but allows map to show through
+        strokeWeight: 8,        // Standard road width
         zIndex: 5,
         clickable: true
       }}
