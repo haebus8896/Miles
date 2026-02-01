@@ -47,6 +47,14 @@ export default function MapScreen({ isLoaded, loadError }) {
   const onMapLoad = useCallback((map) => {
     mapRef.current = map;
     if (mapType) map.setMapTypeId(mapType);
+
+    // FIX: If we already have a focus point (e.g. from Search), pan to it immediately
+    // This fixes the 'Someone Else' flow where the map didn't center correctly
+    const currentFocus = useStore.getState().focusPoint;
+    if (currentFocus) {
+      map.panTo(currentFocus);
+      map.setZoom(20);
+    }
   }, [mapType]);
 
   useEffect(() => {
