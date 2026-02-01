@@ -290,6 +290,9 @@ export default function AddressComposer({ initialData, onSaveSuccess }) {
         houseNumber: '', area: 'Unknown Area', city: 'Unknown City', state: ''
       };
 
+      // DEBUG: Trace Payload
+      console.log('[AddressComposer] Saving Address...', { isEditSave, code, formData, polyline });
+
       // Construct Destination Point (GeoJSON) from Gate Position or Polyline End
       let destLat, destLng;
       const gPos = isEditSave ? initialData?.gatePosition : formData.gatePosition;
@@ -342,6 +345,8 @@ export default function AddressComposer({ initialData, onSaveSuccess }) {
 
       // Override text fields if form has data (already synced via state)
       // Note: formData is initialized from initialData in useEffect, so formData is truth
+
+      console.log('[AddressComposer] Final Address Payload:', finalAddress);
 
       // Save to "Fake Backend" Map
       useStore.getState().addCreatedAddress(code, {
@@ -516,14 +521,18 @@ export default function AddressComposer({ initialData, onSaveSuccess }) {
             )}
 
             <div style={{ position: 'absolute', bottom: 16, left: 0, right: 0, display: 'flex', justifyContent: 'center', gap: 12, zIndex: 10 }}>
-              {!formData.gateImage && <button className="control-btn" style={{ width: 'auto', padding: '0 24px' }} onClick={handleSnap}>📸 Snap</button>}
-              <label className="control-btn outline" style={{ width: 'auto', padding: '0 24px' }}>
-                📂 Upload
-                <input type="file" hidden onChange={handleFileUpload} accept="image/*" />
-              </label>
+              {!formData.gateVerified && (
+                <>
+                  <button className="control-btn" style={{ width: 'auto', padding: '0 24px' }} onClick={handleSnap}>📸 Snap</button>
+                  <label className="control-btn outline" style={{ width: 'auto', padding: '0 24px' }}>
+                    📂 Upload
+                    <input type="file" hidden onChange={handleFileUpload} accept="image/*" />
+                  </label>
+                </>
+              )}
             </div>
           </div>
-          {formData.gateImage && (
+          {(formData.gateImage || formData.gateVerified) && (
             <div style={{ marginTop: 12 }}>
               <button
                 className="control-btn"

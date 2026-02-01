@@ -53,7 +53,7 @@ export default function AddressBook({ onView, onBack, filteredCodes, onClearFilt
                                 <div style={{ flex: 1 }}>
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                                         <h4 style={{ margin: 0, textTransform: 'none', fontSize: 15, fontWeight: 600 }}>
-                                            {addr.addressLabel || 'Unless Address'}
+                                            {addr.addressLabel || 'Unnamed Address'}
                                         </h4>
                                         <span className="badge" style={{ fontSize: 10 }}>{addr.smartAddressCode}</span>
                                     </div>
