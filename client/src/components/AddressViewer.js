@@ -110,6 +110,16 @@ export default function AddressViewer({ data, onEdit, onBack, onViewMap }) {
     const gatePosition = address.gatePosition;
     const pathLength = address.polylineOptimized?.length || 0;
 
+    // Robust Center Point extraction (Gate -> Polyline Start -> Destination -> Default)
+    let mapCenter = defaultCenter;
+    if (gatePosition) mapCenter = gatePosition;
+    else if (address.polylineOptimized?.length > 0) mapCenter = address.polylineOptimized[0];
+    else if (address.destination_point?.coordinates) {
+        mapCenter = { lat: address.destination_point.coordinates[1], lng: address.destination_point.coordinates[0] };
+    } else if (address.destination_point?.lat) {
+        mapCenter = address.destination_point;
+    }
+
     return (
         <div className="panel card" style={{ padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', height: '100%' }}>
 
@@ -171,11 +181,11 @@ export default function AddressViewer({ data, onEdit, onBack, onViewMap }) {
                         <GoogleMap
                             mapContainerStyle={{ width: '100%', height: '100%' }}
                             zoom={18}
-                            center={gatePosition || (address.polylineOptimized?.[0]) || defaultCenter}
+                            center={mapCenter}
                             options={{ disableDefaultUI: true }}
                         >
                             <StreetViewPanorama
-                                position={gatePosition || (address.polylineOptimized?.[0]) || defaultCenter}
+                                position={mapCenter}
                                 visible={true}
                                 options={{
                                     disableDefaultUI: true,
@@ -247,7 +257,7 @@ export default function AddressViewer({ data, onEdit, onBack, onViewMap }) {
                             <GoogleMap
                                 mapContainerStyle={{ width: '100%', height: '100%' }}
                                 zoom={18}
-                                center={gatePosition || (address.polylineOptimized?.[0]) || defaultCenter}
+                                center={mapCenter}
                                 options={{ disableDefaultUI: true, mapTypeId: 'hybrid' }}
                             >
                                 {address.polylineOptimized && (

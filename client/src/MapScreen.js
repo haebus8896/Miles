@@ -16,7 +16,22 @@ const mapOptions = {
   streetViewControl: false
 };
 
-export default function MapScreen({ isLoaded, loadError }) {
+const hotspotMapStyle = [
+  { "elementType": "geometry", "stylers": [{ "color": "#212121" }] },
+  { "elementType": "labels.icon", "stylers": [{ "visibility": "off" }] },
+  { "elementType": "labels.text.fill", "stylers": [{ "color": "#757575" }] },
+  { "elementType": "labels.text.stroke", "stylers": [{ "color": "#212121" }] },
+  { "featureType": "administrative", "elementType": "geometry", "stylers": [{ "color": "#757575" }] },
+  { "featureType": "poi", "elementType": "labels.text.fill", "stylers": [{ "color": "#757575" }] },
+  { "featureType": "poi", "stylers": [{ "visibility": "off" }] },
+  { "featureType": "road", "elementType": "geometry.fill", "stylers": [{ "color": "#2c2c2c" }] },
+  { "featureType": "road", "elementType": "labels.text.fill", "stylers": [{ "color": "#8a8a8a" }] },
+  { "featureType": "road.arterial", "elementType": "geometry", "stylers": [{ "color": "#373737" }] },
+  { "featureType": "road.highway", "elementType": "geometry", "stylers": [{ "color": "#3c3c3c" }] },
+  { "featureType": "water", "elementType": "geometry", "stylers": [{ "color": "#000000" }] }
+];
+
+export default function MapScreen({ isLoaded, loadError, showHotspots, onHotspotClick }) {
   const mapRef = useRef(null);
 
   // Global Store
@@ -50,16 +65,32 @@ export default function MapScreen({ isLoaded, loadError }) {
 
     // FIX: If we already have a focus point (e.g. from Search), pan to it immediately
     // This fixes the 'Someone Else' flow where the map didn't center correctly
+    // FIX: If we already have a focus point (e.g. from Search), pan to it immediately
+    // BUT only if we are NOT in hotspot mode
     const currentFocus = useStore.getState().focusPoint;
-    if (currentFocus) {
+    if (currentFocus && !showHotspots) {
       map.panTo(currentFocus);
       map.setZoom(20);
     }
-  }, [mapType]);
+
+    // Explicitly handle Hotspot Init on Load
+    if (showHotspots) {
+      map.setZoom(5);
+      map.setCenter({ lat: 20.5937, lng: 78.9629 });
+      map.setMapTypeId('roadmap');
+    }
+  }, [mapType, showHotspots]);
 
   useEffect(() => {
     if (mapRef.current) mapRef.current.setMapTypeId(mapType);
-  }, [mapType]);
+
+    // Hotspot Mode Init
+    if (showHotspots && mapRef.current) {
+      mapRef.current.setZoom(5);
+      mapRef.current.setCenter({ lat: 20.5937, lng: 78.9629 }); // Center of India
+      mapRef.current.setMapTypeId('roadmap');
+    }
+  }, [mapType, showHotspots]);
 
   // Auto-Zoom on Drawing
   useEffect(() => {
@@ -121,8 +152,8 @@ export default function MapScreen({ isLoaded, loadError }) {
 
   // Focus Point Listener
   useEffect(() => {
-    if (focusPoint) panTo(focusPoint, 20);
-  }, [focusPoint, panTo]);
+    if (focusPoint && !showHotspots) panTo(focusPoint, 20);
+  }, [focusPoint, panTo, showHotspots]);
 
   // Map Click - Dot Placement Logic
   const handleMapClick = (event) => {
@@ -217,13 +248,14 @@ export default function MapScreen({ isLoaded, loadError }) {
         </div>
       )}
 
+
       <GoogleMap
         onLoad={onMapLoad}
         onClick={handleMapClick}
         mapContainerStyle={mapContainerStyle}
         center={userLocation || defaultCenter}
         zoom={18}
-        options={mapOptions}
+        options={showHotspots ? { ...mapOptions, styles: hotspotMapStyle } : mapOptions}
       >
         {/* Street View Removed - Satellite Toggle handles MapType */}
         {/* Render Detected Roads (Radius) */}
@@ -362,7 +394,7 @@ export default function MapScreen({ isLoaded, loadError }) {
         )}
 
         {/* Saved Address Marker (View Mode) */}
-        {savedAddress && (savedAddress.destination_point || savedAddress.location) && (
+        {savedAddress && (savedAddress.destination_point || savedAddress.location) && !showHotspots && (
           <Marker
             position={{
               lat: savedAddress.destination_point?.coordinates ? savedAddress.destination_point.coordinates[1] : savedAddress.location.lat,
@@ -387,6 +419,45 @@ export default function MapScreen({ isLoaded, loadError }) {
             }}
           />
         )}
+
+        {/* Hotspots Render */}
+        {showHotspots && Object.values(useStore.getState().createdAddressesMap).map((item) => {
+          const addr = item.address;
+          let lat, lng;
+          if (addr.destination_point?.coordinates) {
+            lat = addr.destination_point.coordinates[1];
+            lng = addr.destination_point.coordinates[0];
+          } else if (addr.destination_point?.lat) {
+            lat = addr.destination_point.lat;
+            lng = addr.destination_point.lng;
+          } else if (addr.polylineOptimized?.length > 0) {
+            lat = addr.polylineOptimized[addr.polylineOptimized.length - 1].lat;
+            lng = addr.polylineOptimized[addr.polylineOptimized.length - 1].lng;
+          }
+
+          if (!lat || !lng) return null;
+
+          return (
+            <OverlayView
+              key={addr.smartAddressCode}
+              position={{ lat, lng }}
+              mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
+              getPixelPositionOffset={(x, y) => ({ x: -10, y: -10 })}
+            >
+              <div
+                className="hotspot-marker"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onHotspotClick && onHotspotClick(addr.smartAddressCode, mapRef.current ? mapRef.current.getZoom() : 5);
+                }}
+                style={{ cursor: 'pointer' }}
+              >
+                <div className="hotspot-ring"></div>
+                <div className="hotspot-dot"></div>
+              </div>
+            </OverlayView>
+          );
+        })}
       </GoogleMap>
 
       {/* Overlay Status */}

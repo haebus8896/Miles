@@ -69,6 +69,13 @@ export const useStore = create((set) => ({
     return { createdAddressesMap: updatedMap };
   }),
 
+  removeCreatedAddress: (code) => set((state) => {
+    const updatedMap = { ...state.createdAddressesMap };
+    delete updatedMap[code];
+    localStorage.setItem('fake_backend_db', JSON.stringify(updatedMap));
+    return { createdAddressesMap: updatedMap };
+  }),
+
   profileForm: defaultProfileForm,
   setProfileField: (field, value) =>
     set((state) => ({

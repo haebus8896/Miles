@@ -13,9 +13,11 @@ const MinimalField = ({ label, children }) => (
   </label>
 );
 
-export default function AddressComposer({ initialData }) {
+export default function AddressComposer({ initialData, onSaveSuccess }) {
   // Global Store
   const selectedRoadPoint = useStore((state) => state.selectedRoadPoint);
+
+  const isEditMode = !!initialData;
   const polyline = useStore((state) => state.polyline);
   const setPolyline = useStore((state) => state.setPolyline);
   const setSelectedRoadPoint = useStore((state) => state.setSelectedRoadPoint);
@@ -43,19 +45,35 @@ export default function AddressComposer({ initialData }) {
   // Form Data
   const [formData, setFormData] = useState({
     userName: '',
-    addressContext: 'self', // 'self' or 'other'
+    addressContext: 'self',
     gateImage: null,
     otp: '',
     userPhone: '',
-    // Detailed Address Fields
     houseNumber: '',
     floorNumber: '',
     blockName: '',
     landmark: '',
-    // Temp storage for extracted details
+    addressLabel: '', // Added label field
     tempDetails: {},
     tempFormatted: ''
   });
+
+  // Pre-fill on Edit
+  useEffect(() => {
+    if (initialData) {
+      setFormData(prev => ({
+        ...prev,
+        userName: initialData.userName || '',
+        addressLabel: initialData.addressLabel || '',
+        houseNumber: initialData.addressDetails?.houseNumber || '',
+        floorNumber: initialData.apartmentDetails?.floorNumber || '',
+        blockName: initialData.apartmentDetails?.block || '',
+        // If gateImage is needed for preview we can set it, but we don't show it in slide 0
+        gateImage: initialData.gateImage,
+        addressContext: 'self' // Default for edit
+      }));
+    }
+  }, [initialData]);
 
   // UI State
   const [loading, setLoading] = useState(false);
@@ -105,6 +123,16 @@ export default function AddressComposer({ initialData }) {
       const pov = panoramaRef.current.getPov();
       const zoom = panoramaRef.current.getZoom();
       const position = panoramaRef.current.getPosition();
+      const lat = position.lat();
+      const lng = position.lng();
+
+      // Construct Static Street View Image URL
+      const apiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
+      // Approximate FOV from Zoom (Zoom 1 ~ 90, Zoom 3 ~ 45?) - Simplified mapping or default
+      // Standard Street View FOV is usually 90. Let's stick to default or slight zoom.
+      const fov = 180 / Math.pow(2, zoom);
+
+      const staticImageUrl = `https://maps.googleapis.com/maps/api/streetview?size=600x400&location=${lat},${lng}&heading=${pov.heading}&pitch=${pov.pitch}&fov=${fov}&key=${apiKey}`;
 
       // Store explicit POV and finalized position (in case they moved down the street)
       setFormData(prev => ({
@@ -112,7 +140,8 @@ export default function AddressComposer({ initialData }) {
         gateVerified: true,
         gatePov: pov,
         gateZoom: zoom,
-        gatePosition: { lat: position.lat(), lng: position.lng() }
+        gatePosition: { lat, lng },
+        gateImage: staticImageUrl // Set the image to reveal confirm button
       }));
     } else {
       setFormData(prev => ({ ...prev, gateVerified: true }));
@@ -240,13 +269,19 @@ export default function AddressComposer({ initialData }) {
 
 
   // Save Logic
-  const handleSave = async () => {
+  const handleSave = async (isEditSave = false) => {
     setLoading(true);
     // Simulate API call
     setTimeout(() => {
-      // Generate Unique Code
-      const randomPart = Math.random().toString(36).substring(2, 6).toUpperCase();
-      const code = `M-${randomPart}-NEW`;
+      // Generate Unique Code OR Use Existing
+      let code = successCode;
+
+      if (initialData && initialData.code) {
+        code = initialData.code;
+      } else if (!code) {
+        const randomPart = Math.random().toString(36).substring(2, 6).toUpperCase();
+        code = `M-${randomPart}-NEW`;
+      }
 
       setSuccessCode(code);
 
@@ -255,14 +290,34 @@ export default function AddressComposer({ initialData }) {
         houseNumber: '', area: 'Unknown Area', city: 'Unknown City', state: ''
       };
 
-      // Allow user override if they typed something specific (logic can be added)
-      // For now, mix captured with manual
+      // Construct Destination Point (GeoJSON) from Gate Position or Polyline End
+      let destLat, destLng;
+      const gPos = isEditSave ? initialData?.gatePosition : formData.gatePosition;
+      const poly = isEditSave ? (initialData?.polylineOptimized || []) : polyline;
+
+      if (gPos && gPos.lat) {
+        destLat = gPos.lat;
+        destLng = gPos.lng;
+      } else if (poly && poly.length > 0) {
+        destLat = poly[poly.length - 1].lat;
+        destLng = poly[poly.length - 1].lng;
+      }
+
+      // GeoJSON construction
+      let finalDestPoint = null;
+      if (destLat && destLng) {
+        finalDestPoint = { type: 'Point', coordinates: [destLng, destLat] };
+      } else if (isEditSave && initialData?.destination_point) {
+        finalDestPoint = initialData.destination_point;
+      }
 
       const finalAddress = {
         smartAddressCode: code,
         residenceType: 'house',
         userName: formData.userName,
         addressLabel: formData.addressLabel,
+        // Ensure destination_point is set for MapScreen compatibility
+        destination_point: finalDestPoint,
         addressDetails: {
           houseNumber: formData.houseNumber || capturedDetails.houseNumber || 'N/A',
           area: capturedDetails.area || 'Current Location',
@@ -275,14 +330,18 @@ export default function AddressComposer({ initialData }) {
           block: formData.blockName,
           floorNumber: formData.floorNumber
         },
-        polylineOptimized: polyline, // <--- REAL ROUTE
-        gateImage: formData.gateImage,
-        gateVerified: formData.gateVerified,
-        gatePosition: formData.gatePosition,
-        gatePov: formData.gatePov,
-        gateZoom: formData.gateZoom,
-        transportMode: currentMode // <--- Save Mode for Styling
+        // Preserve spatial data if editing, else use current store
+        polylineOptimized: isEditSave ? (initialData?.polylineOptimized || []) : (polyline || []),
+        gateImage: isEditSave ? (initialData?.gateImage) : formData.gateImage,
+        gateVerified: isEditSave ? (initialData?.gateVerified) : formData.gateVerified,
+        gatePosition: isEditSave ? (initialData?.gatePosition) : formData.gatePosition,
+        gatePov: isEditSave ? (initialData?.gatePov) : formData.gatePov,
+        gateZoom: isEditSave ? (initialData?.gateZoom) : formData.gateZoom,
+        transportMode: isEditSave ? (initialData?.transportMode || 'car') : currentMode
       };
+
+      // Override text fields if form has data (already synced via state)
+      // Note: formData is initialized from initialData in useEffect, so formData is truth
 
       // Save to "Fake Backend" Map
       useStore.getState().addCreatedAddress(code, {
@@ -295,8 +354,13 @@ export default function AddressComposer({ initialData }) {
         }
       });
 
-      nextSlide();
       setLoading(false);
+
+      if (isEditSave && onSaveSuccess) {
+        onSaveSuccess();
+      } else {
+        nextSlide();
+      }
     }, 1500);
   };
 
@@ -375,9 +439,19 @@ export default function AddressComposer({ initialData }) {
           </MinimalField>
 
           <div style={{ marginTop: 12, paddingBottom: 20 }}>
-            <button className="control-btn" onClick={nextSlide}>
-              Continue to Map →
-            </button>
+            {isEditMode ? (
+              <button
+                className="control-btn"
+                onClick={() => handleSave(true)}
+                style={{ background: '#4ade80', color: '#000' }}
+              >
+                {loading ? 'Saving...' : 'Save Changes'}
+              </button>
+            ) : (
+              <button className="control-btn" onClick={nextSlide}>
+                Continue to Map →
+              </button>
+            )}
           </div>
         </div>
 
@@ -450,7 +524,22 @@ export default function AddressComposer({ initialData }) {
             </div>
           </div>
           {formData.gateImage && (
-            <button style={{ marginTop: 12, width: '100%' }} className="small-btn" onClick={() => setFormData(prev => ({ ...prev, gateImage: null }))}>Retake Photo</button>
+            <div style={{ marginTop: 12 }}>
+              <button
+                className="control-btn"
+                style={{ width: '100%', marginBottom: 8, background: '#4ade80', color: '#000' }}
+                onClick={() => handleSave(false)}
+              >
+                {loading ? 'Creating...' : 'Confirm & Create Address'}
+              </button>
+              <button
+                className="small-btn"
+                style={{ width: '100%' }}
+                onClick={() => setFormData(prev => ({ ...prev, gateImage: null }))}
+              >
+                Retake Photo
+              </button>
+            </div>
           )}
         </div>
 
